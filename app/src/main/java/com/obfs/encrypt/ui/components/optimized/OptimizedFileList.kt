@@ -179,14 +179,7 @@ private fun RefreshIndicatorPill(
                 .alpha(pillAlpha)
                 .scale(pillScale)
                 .clip(RoundedCornerShape(50))
-                .background(
-                    brush = Brush.linearGradient(
-                        listOf(
-                            MaterialTheme.colorScheme.surfaceContainerHighest,
-                            MaterialTheme.colorScheme.surfaceContainer
-                        )
-                    )
-                )
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             contentAlignment = Alignment.Center
         ) {

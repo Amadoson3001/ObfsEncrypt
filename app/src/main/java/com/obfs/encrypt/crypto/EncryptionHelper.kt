@@ -357,7 +357,7 @@ class EncryptionHelper {
             val magicBuffer = ByteArray(MAGIC_HEADER.length)
             inputStream.read(magicBuffer)
             val magic = String(magicBuffer, Charsets.UTF_8)
-            
+
             val isV2Format = magic == MAGIC_HEADER_V2
             if (magic != MAGIC_HEADER && !isV2Format) {
                 throw IllegalArgumentException("Invalid file format. Expected OBFSv3 header but got: $magic")
@@ -379,7 +379,7 @@ class EncryptionHelper {
                 }
                 EncryptionMethod.entries[methodByte]
             }
-            
+
             // Read integrity check flag (v3 format only)
             val hasIntegrityCheck = if (isV2Format) {
                 false
@@ -401,7 +401,7 @@ class EncryptionHelper {
             var totalBytesDecrypted = 0L
             var chunkIndex = 0L
             var lastUpdateTime = startTime
-            
+
             // For integrity verification
             val outputBuffer = if (hasIntegrityCheck || verifyIntegrity) {
                 java.io.ByteArrayOutputStream()
@@ -421,7 +421,7 @@ class EncryptionHelper {
                 }
 
                 val chunkLen = ByteBuffer.wrap(lenBuf).int
-                
+
                 // Check if this looks like integrity data at the end
                 if (chunkLen <= 0 || chunkLen > CHUNK_SIZE + 256) {
                     // Could be start of integrity data, push back and break
@@ -435,7 +435,13 @@ class EncryptionHelper {
                 val cipher = Cipher.getInstance("AES/GCM/NoPadding")
                 cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH, nonce))
 
-                val plainChunk = cipher.doFinal(cipherChunk)
+                // This will throw AEADBadTagException if password is wrong or data is corrupted
+                val plainChunk = try {
+                    cipher.doFinal(cipherChunk)
+                } catch (e: javax.crypto.AEADBadTagException) {
+                    throw javax.crypto.AEADBadTagException("Incorrect password or corrupted file. Chunk index: $chunkIndex")
+                }
+
                 outputStream.write(plainChunk)
                 outputBuffer?.write(plainChunk)
 
@@ -450,20 +456,20 @@ class EncryptionHelper {
                     lastUpdateTime = currentTime
                 }
             }
-            
+
             // Verify integrity if enabled
             var integrityResult: IntegrityResult? = null
             if (hasIntegrityCheck) {
                 try {
                     val expectedChecksum = ByteArray(SHA256_CHECKSUM_LENGTH)
                     readFully(inputStream, expectedChecksum)
-                    
+
                     val expectedHmac = ByteArray(HMAC_SHA256_LENGTH)
                     readFully(inputStream, expectedHmac)
-                    
+
                     // Verify HMAC
                     val hmacValid = verifyHmac(expectedChecksum, key, expectedHmac)
-                    
+
                     if (hmacValid && outputBuffer != null) {
                         val computedChecksum = computeChecksum(outputBuffer.toByteArray())
                         val checksumValid = java.security.MessageDigest.isEqual(computedChecksum, expectedChecksum)
@@ -493,14 +499,18 @@ class EncryptionHelper {
 
             val finalSize = fileSize ?: totalBytesDecrypted
             progressCallback(finalSize, finalSize, startTime)
-            
+
             return@withContext DecryptionResult(
                 success = true,
                 integrityResult = integrityResult
             )
 
         } catch (e: javax.crypto.AEADBadTagException) {
-            throw IllegalArgumentException("Incorrect password or corrupted file.")
+            Log.e("EncryptionHelper", "Password verification failed - AEAD tag mismatch", e)
+            throw SecurityException("Incorrect password or corrupted file. The authentication tag verification failed.")
+        } catch (e: java.security.GeneralSecurityException) {
+            Log.e("EncryptionHelper", "Security error during decryption", e)
+            throw SecurityException("Decryption failed due to a security error: ${e.message}")
         } catch (e: Exception) {
             Log.e("EncryptionHelper", "Decryption Failed", e)
             throw e

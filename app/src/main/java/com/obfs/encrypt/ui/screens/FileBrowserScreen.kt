@@ -79,6 +79,7 @@ import com.obfs.encrypt.ui.components.FileFilterChips
 import com.obfs.encrypt.ui.components.FilePathBreadcrumb
 import com.obfs.encrypt.ui.components.FileSearchBar
 import com.obfs.encrypt.ui.components.QuickAccessSection
+import com.obfs.encrypt.ui.components.optimized.OptimizedFileList
 import com.obfs.encrypt.ui.components.shouldIncludeFile
 import com.obfs.encrypt.viewmodel.FileItem
 import com.obfs.encrypt.viewmodel.FileManagerViewModel
@@ -94,8 +95,7 @@ fun FileBrowserScreen(
     fileManagerViewModel: FileManagerViewModel = hiltViewModel()
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    
+
     var hasPermission by remember {
         mutableStateOf(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -108,12 +108,13 @@ fun FileBrowserScreen(
             }
         )
     }
-    
+
     var showSearch by remember { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var selectedFilter by rememberSaveable { mutableStateOf(FileFilter.ALL) }
-    var quickAccessExpanded by rememberSaveable { mutableStateOf(true) }
-    
+    val quickAccessExpanded by viewModel.quickAccessExpanded.collectAsState()
+    val scope = rememberCoroutineScope()
+
     val selectedItems by fileManagerViewModel.selectedItems.collectAsState()
     val currentDirectory by fileManagerViewModel.currentDirectory.collectAsState()
     val filesAndFolders by fileManagerViewModel.filesAndFolders.collectAsState()
@@ -369,7 +370,7 @@ fun FileBrowserScreen(
                             }
                         },
                         isExpanded = quickAccessExpanded,
-                        onToggleExpand = { quickAccessExpanded = !quickAccessExpanded },
+                        onToggleExpand = { viewModel.setQuickAccessExpanded(!quickAccessExpanded) },
                         modifier = Modifier.padding(vertical = 4.dp)
                     )
                 }
@@ -402,47 +403,30 @@ fun FileBrowserScreen(
                 )
             }
             
-            if (isLoading) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator()
-                }
-            } else if (filteredFiles.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = if (searchQuery.isNotEmpty()) "No files found" else "No files in this folder",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            } else {
-                LazyColumn(
-                    contentPadding = PaddingValues(vertical = 8.dp)
-                ) {
-                    items(filteredFiles, key = { it.file.absolutePath }) { item ->
-                        FileBrowserItem(
-                            item = item,
-                            isSelected = selectedItems.contains(item.file),
-                            hasAnySelection = hasSelection,
-                            onClick = {
-                                if (item.isDirectory) {
-                                    fileManagerViewModel.navigateTo(item.file)
-                                } else {
-                                    fileManagerViewModel.toggleSelection(item.file)
-                                }
-                            },
-                            onToggleSelect = {
-                                fileManagerViewModel.toggleSelection(item.file)
-                            }
-                        )
+            OptimizedFileList(
+                filesAndFolders = filteredFiles,
+                selectedItems = selectedItems,
+                isLoading = isLoading,
+                onFileClick = { item ->
+                    if (item.isDirectory) {
+                        fileManagerViewModel.navigateTo(item.file)
+                    } else {
+                        fileManagerViewModel.toggleSelection(item.file)
                     }
-                }
-            }
+                },
+                onFileLongClick = { item ->
+                    if (!item.isDirectory) {
+                        fileManagerViewModel.toggleSelection(item.file)
+                    }
+                },
+                onToggleSelect = { file ->
+                    fileManagerViewModel.toggleSelection(file)
+                },
+                onSelectAll = { fileManagerViewModel.selectAll() },
+                onClearSelection = { fileManagerViewModel.clearSelection() },
+                onRefresh = { fileManagerViewModel.refreshCurrentDirectory() },
+                modifier = Modifier.weight(1f)
+            )
 
         }
     }
@@ -497,124 +481,6 @@ fun FileBrowserScreen(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun FileBrowserItem(
-    item: FileItem,
-    isSelected: Boolean,
-    hasAnySelection: Boolean,
-    onClick: () -> Unit,
-    onToggleSelect: () -> Unit
-) {
-    val context = LocalContext.current
-    
-    val dateString = remember(item.lastModified) {
-        java.text.SimpleDateFormat("MMM dd, yyyy", java.util.Locale.getDefault())
-            .format(java.util.Date(item.lastModified))
-    }
-    
-    val sizeString = remember(item.size) {
-        if (!item.isDirectory) {
-            android.text.format.Formatter.formatShortFileSize(context, item.size)
-        } else ""
-    }
-    
-    val fileType = remember(item.name, item.isDirectory) {
-        getFileType(item.name, item.isDirectory)
-    }
-    
-    val isImage = fileType == FileType.IMAGE
-    val fileColor = getColorForFileType(fileType)
-    
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = if (isSelected) {
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-        } else {
-            Color.Transparent
-        }
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .combinedClickable(
-                    onClick = onClick,
-                    onLongClick = {
-                        if (!item.isDirectory) {
-                            onToggleSelect()
-                        }
-                    },
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                )
-                .padding(horizontal = 20.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (isImage && !item.isDirectory) {
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                    contentAlignment = Alignment.Center
-                ) {
-                    AsyncImage(
-                        model = item.file,
-                        contentDescription = item.name,
-                        modifier = Modifier.fillMaxSize(),
-                        error = painterResource(android.R.drawable.ic_menu_gallery),
-                        placeholder = painterResource(android.R.drawable.ic_menu_gallery)
-                    )
-                }
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(fileColor.copy(alpha = 0.1f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = getIconForFileType(fileType),
-                        contentDescription = null,
-                        tint = fileColor,
-                        modifier = Modifier.size(26.dp)
-                    )
-                }
-            }
-            
-            Spacer(modifier = Modifier.width(16.dp))
-            
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = item.name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = if (isSelected) FontWeight.SemiBold else if (item.isDirectory) FontWeight.Medium else FontWeight.Normal,
-                    maxLines = 1,
-                    color = if (isSelected) {
-                        MaterialTheme.colorScheme.onPrimaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    }
-                )
-                if (sizeString.isNotEmpty()) {
-                    Text(
-                        text = "$dateString • $sizeString",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            
-            AnimatedVisibility(visible = hasAnySelection) {
-                Checkbox(
-                    checked = isSelected,
-                    onCheckedChange = { onToggleSelect() }
-                )
-            }
-        }
-    }
-}
 
 @Composable
 private fun FileBrowserPermissionRequest(onRequest: () -> Unit) {

@@ -111,18 +111,11 @@ fun OutputLocationDialog(
                         .fillMaxWidth()
                         .verticalScroll(rememberScrollState())
                 ) {
-                    // Header with gradient
+                    // Header
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(
-                                Brush.linearGradient(
-                                    colors = listOf(
-                                        MaterialTheme.colorScheme.primary,
-                                        MaterialTheme.colorScheme.primaryContainer
-                                    )
-                                )
-                            )
+                            .background(MaterialTheme.colorScheme.primaryContainer)
                             .padding(24.dp)
                     ) {
                         Column(
@@ -132,20 +125,20 @@ fun OutputLocationDialog(
                                 imageVector = Icons.Default.LocationOn,
                                 contentDescription = null,
                                 modifier = Modifier.size(40.dp),
-                                tint = MaterialTheme.colorScheme.onPrimary
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
                                 text = "Output Location",
                                 style = MaterialTheme.typography.headlineSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimary
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = "Where should files be saved?",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                             )
                         }
                     }

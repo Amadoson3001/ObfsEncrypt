@@ -49,7 +49,10 @@ class MainViewModel @Inject constructor(
 
     private val _themeMode = MutableStateFlow(ThemeMode.SYSTEM)
     val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
-    
+
+    private val _quickAccessExpanded = MutableStateFlow(true)
+    val quickAccessExpanded: StateFlow<Boolean> = _quickAccessExpanded.asStateFlow()
+
     // Keyfile support
     private val _keyfileUri = MutableStateFlow<Uri?>(null)
     val keyfileUri: StateFlow<Uri?> = _keyfileUri.asStateFlow()
@@ -80,6 +83,11 @@ class MainViewModel @Inject constructor(
                 _themeMode.value = mode
             }
         }
+        viewModelScope.launch {
+            settingsRepository.quickAccessExpanded.collect { expanded ->
+                _quickAccessExpanded.value = expanded
+            }
+        }
     }
 
     fun toggleSecureDelete(enabled: Boolean) {
@@ -96,7 +104,12 @@ class MainViewModel @Inject constructor(
         _themeMode.value = mode
         viewModelScope.launch { settingsRepository.setThemeMode(mode) }
     }
-    
+
+    fun setQuickAccessExpanded(expanded: Boolean) {
+        _quickAccessExpanded.value = expanded
+        viewModelScope.launch { settingsRepository.setQuickAccessExpanded(expanded) }
+    }
+
     fun setKeyfileUri(uri: Uri?) {
         _keyfileUri.value = uri
     }

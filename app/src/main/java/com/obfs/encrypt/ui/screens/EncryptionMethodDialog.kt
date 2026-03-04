@@ -80,18 +80,11 @@ fun EncryptionMethodDialog(
                 Column(
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    // Header with gradient
+                    // Header
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(
-                                Brush.linearGradient(
-                                    colors = listOf(
-                                        MaterialTheme.colorScheme.primary,
-                                        MaterialTheme.colorScheme.secondary
-                                    )
-                                )
-                            )
+                            .background(MaterialTheme.colorScheme.primaryContainer)
                             .padding(24.dp)
                     ) {
                         Column(
@@ -101,20 +94,20 @@ fun EncryptionMethodDialog(
                                 imageVector = Icons.Default.Shield,
                                 contentDescription = null,
                                 modifier = Modifier.size(40.dp),
-                                tint = MaterialTheme.colorScheme.onPrimary
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
                                 text = "Encryption Method",
                                 style = MaterialTheme.typography.headlineSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimary
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = "Choose your security level",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                             )
                         }
                     }
@@ -278,7 +271,7 @@ private fun MethodOption(
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Icon container with gradient
+            // Icon container
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = if (isSelected) {

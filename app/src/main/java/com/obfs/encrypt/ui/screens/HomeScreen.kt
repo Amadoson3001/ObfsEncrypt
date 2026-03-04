@@ -558,12 +558,6 @@ private fun EncryptTabContent(
 @Composable
 private fun ModernHeroHeader(encryptedCount: Int) {
     val density = LocalDensity.current
-    val gradientBrush = Brush.linearGradient(
-        colors = listOf(
-            MaterialTheme.colorScheme.primary,
-            MaterialTheme.colorScheme.primaryContainer
-        )
-    )
 
     ElevatedCard(
         modifier = Modifier
@@ -571,16 +565,15 @@ private fun ModernHeroHeader(encryptedCount: Int) {
             .pressClickEffect(),
         shape = RoundedCornerShape(24.dp),
         colors = androidx.compose.material3.CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surface
+            containerColor = MaterialTheme.colorScheme.primaryContainer
         ),
         elevation = androidx.compose.material3.CardDefaults.elevatedCardElevation(
-            defaultElevation = 4.dp
+            defaultElevation = 2.dp
         )
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(gradientBrush)
                 .padding(24.dp)
         ) {
             Row(
@@ -593,20 +586,20 @@ private fun ModernHeroHeader(encryptedCount: Int) {
                         text = "Obfs Encrypt",
                         style = MaterialTheme.typography.headlineMedium,
                         fontWeight = FontWeight.Black,
-                        color = MaterialTheme.colorScheme.onPrimary,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
                         letterSpacing = with(density) { (-0.5).dp.toSp() }
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "Military-grade encryption for your files",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f),
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
                         lineHeight = 20.sp
                     )
                 }
 
                 Surface(
-                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.15f),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Row(
@@ -618,13 +611,13 @@ private fun ModernHeroHeader(encryptedCount: Int) {
                             imageVector = Icons.Default.Verified,
                             contentDescription = null,
                             modifier = Modifier.size(14.dp),
-                            tint = MaterialTheme.colorScheme.onPrimary
+                            tint = MaterialTheme.colorScheme.primary
                         )
                         Text(
                             text = "AES-256-GCM",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimary
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
                 }
@@ -637,7 +630,7 @@ private fun ModernHeroHeader(encryptedCount: Int) {
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Surface(
-                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.12f),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Row(
@@ -649,26 +642,26 @@ private fun ModernHeroHeader(encryptedCount: Int) {
                             imageVector = Icons.Default.Lock,
                             contentDescription = null,
                             modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.onPrimary
+                            tint = MaterialTheme.colorScheme.primary
                         )
                         Column {
                             Text(
                                 text = encryptedCount.toString(),
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimary
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             Text(
                                 text = "Files Encrypted",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f)
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                             )
                         }
                     }
                 }
 
                 Surface(
-                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.12f),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Row(
@@ -680,19 +673,19 @@ private fun ModernHeroHeader(encryptedCount: Int) {
                             imageVector = Icons.Default.Security,
                             contentDescription = null,
                             modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.onPrimary
+                            tint = MaterialTheme.colorScheme.primary
                         )
                         Column {
                             Text(
                                 text = "Active",
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimary
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             Text(
                                 text = "Protection",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f)
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                             )
                         }
                     }
@@ -1217,7 +1210,7 @@ private fun SecurityTipsCard() {
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
         colors = androidx.compose.material3.CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
         ),
         elevation = androidx.compose.material3.CardDefaults.elevatedCardElevation(
             defaultElevation = 0.dp
@@ -1233,7 +1226,7 @@ private fun SecurityTipsCard() {
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Surface(
-                    color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f),
+                    color = MaterialTheme.colorScheme.primaryContainer,
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.size(36.dp)
                 ) {
@@ -1245,7 +1238,7 @@ private fun SecurityTipsCard() {
                             imageVector = Icons.Outlined.Lightbulb,
                             contentDescription = null,
                             modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.secondary
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                     }
                 }
@@ -1253,7 +1246,7 @@ private fun SecurityTipsCard() {
                     text = "Security Best Practices",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
 
@@ -1274,21 +1267,21 @@ private fun SecurityTipsCard() {
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Surface(
-                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.2f),
+                        color = MaterialTheme.colorScheme.primaryContainer,
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Text(
                             text = "${index + 1}",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.secondary,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                         )
                     }
                     Text(
                         text = tip,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f)
                     )
                 }

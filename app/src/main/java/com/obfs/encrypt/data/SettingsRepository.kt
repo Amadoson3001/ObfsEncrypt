@@ -29,6 +29,7 @@ class SettingsRepository @Inject constructor(
         val SECURE_DELETE_KEY = booleanPreferencesKey("secure_delete_originals")
         val OUTPUT_DIRECTORY_URI_KEY = stringPreferencesKey("output_directory_uri")
         val THEME_MODE_KEY = stringPreferencesKey("theme_mode")
+        val QUICK_ACCESS_EXPANDED_KEY = booleanPreferencesKey("quick_access_expanded")
     }
 
     /**
@@ -89,6 +90,23 @@ class SettingsRepository @Inject constructor(
     suspend fun setThemeMode(mode: ThemeMode) {
         context.dataStore.edit { preferences ->
             preferences[THEME_MODE_KEY] = mode.name
+        }
+    }
+
+    /**
+     * Flow of quick access expanded state.
+     * Default: true (expanded)
+     */
+    val quickAccessExpanded: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[QUICK_ACCESS_EXPANDED_KEY] ?: true
+    }
+
+    /**
+     * Update quick access expanded state.
+     */
+    suspend fun setQuickAccessExpanded(expanded: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[QUICK_ACCESS_EXPANDED_KEY] = expanded
         }
     }
 }
