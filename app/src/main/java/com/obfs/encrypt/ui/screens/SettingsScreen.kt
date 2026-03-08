@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.BrightnessAuto
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Help
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Lock
@@ -113,7 +114,8 @@ import kotlinx.coroutines.launch
 fun SettingsScreen(
     viewModel: MainViewModel,
     previousTabIndex: Int = 0,
-    onNavigateBack: (Int) -> Unit
+    onNavigateBack: (Int) -> Unit,
+    onNavigateToHelp: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val activity = context as androidx.appcompat.app.AppCompatActivity
@@ -194,6 +196,15 @@ fun SettingsScreen(
                 navigationIcon = {
                     IconButton(onClick = { onNavigateBack(previousTabIndex) }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onNavigateToHelp) {
+                        Icon(
+                            imageVector = Icons.Default.Help,
+                            contentDescription = stringResource(R.string.help),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

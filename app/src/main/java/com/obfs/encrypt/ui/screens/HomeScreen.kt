@@ -103,6 +103,8 @@ import com.obfs.encrypt.ui.theme.Motion
 import com.obfs.encrypt.ui.theme.pressClickEffect
 import com.obfs.encrypt.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
+import androidx.compose.material.icons.filled.CloudSync
+import com.obfs.encrypt.ui.components.WorkStatusSheet
 
 data class RecentActivity(
     val fileName: String,
@@ -148,6 +150,10 @@ fun HomeScreen(
 
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(restoreTabIndex ?: 0) }
     var previousTabIndex by remember { mutableIntStateOf(0) }
+    var showWorkStatus by remember { mutableStateOf(false) }
+
+    val workInfos by viewModel.batchWorkInfo.collectAsState()
+    val hasActiveWork = workInfos.any { !it.state.isFinished }
 
     LaunchedEffect(restoreTabIndex) {
         restoreTabIndex?.let { tabIndex ->
@@ -170,71 +176,83 @@ fun HomeScreen(
             )
         }
     ) { paddingValues ->
-        AnimatedContent(
-            targetState = selectedTabIndex,
-            transitionSpec = {
-                val direction = if (targetState > initialState) 1 else -1
+        Box(modifier = Modifier.padding(paddingValues).fillMaxSize()) {
+            AnimatedContent(
+                targetState = selectedTabIndex,
+                transitionSpec = {
+                    val direction = if (targetState > initialState) 1 else -1
 
-                val enter = slideInHorizontally(
-                    initialOffsetX = { fullWidth -> direction * fullWidth / 3 },
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMedium
+                    val enter = slideInHorizontally(
+                        initialOffsetX = { fullWidth -> direction * fullWidth / 3 },
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMedium
+                        )
+                    ) + fadeIn(
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMedium
+                        )
+                    ) + scaleIn(
+                        initialScale = 0.95f,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMedium
+                        )
                     )
-                ) + fadeIn(
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMedium
-                    )
-                ) + scaleIn(
-                    initialScale = 0.95f,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMedium
-                    )
-                )
 
-                val exit = slideOutHorizontally(
-                    targetOffsetX = { fullWidth -> -direction * fullWidth / 3 },
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMedium
+                    val exit = slideOutHorizontally(
+                        targetOffsetX = { fullWidth -> -direction * fullWidth / 3 },
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMedium
+                        )
+                    ) + fadeOut(
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMedium
+                        )
+                    ) + scaleOut(
+                        targetScale = 0.95f,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioNoBouncy,
+                            stiffness = Spring.StiffnessMedium
+                        )
                     )
-                ) + fadeOut(
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMedium
-                    )
-                ) + scaleOut(
-                    targetScale = 0.95f,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMedium
-                    )
-                )
 
-                enter togetherWith exit using SizeTransform(clip = false)
-            },
-            modifier = Modifier.padding(paddingValues).fillMaxSize(),
-            label = "tab_transition"
-        ) { tabIndex ->
-            when (tabIndex) {
-                0 -> EncryptTabContent(
-                    viewModel = viewModel,
-                    onNavigateToDecrypt = onNavigateToDecrypt,
-                    onNavigateToSettings = onNavigateToSettings,
-                    onNavigateToFileBrowser = onNavigateToFileBrowser,
-                    onNavigateToProgress = onNavigateToProgress,
-                    onNavigateToHistory = onNavigateToHistory,
-                    currentTabIndex = tabIndex
-                )
-                1 -> FileBrowserScreen(
-                    onNavigateBack = { selectedTabIndex = 0 },
-                    onNavigateToProgress = onNavigateToProgress,
-                    viewModel = viewModel
-                )
+                    enter togetherWith exit using SizeTransform(clip = false)
+                },
+                modifier = Modifier.fillMaxSize(),
+                label = "tab_transition"
+            ) { tabIndex ->
+                when (tabIndex) {
+                    0 -> EncryptTabContent(
+                        viewModel = viewModel,
+                        onNavigateToDecrypt = onNavigateToDecrypt,
+                        onNavigateToSettings = onNavigateToSettings,
+                        onNavigateToFileBrowser = onNavigateToFileBrowser,
+                        onNavigateToProgress = onNavigateToProgress,
+                        onNavigateToHistory = onNavigateToHistory,
+                        currentTabIndex = tabIndex,
+                        onShowWorkStatus = { showWorkStatus = true },
+                        hasActiveWork = hasActiveWork
+                    )
+                    1 -> FileBrowserScreen(
+                        onNavigateBack = { selectedTabIndex = 0 },
+                        onNavigateToProgress = onNavigateToProgress,
+                        viewModel = viewModel
+                    )
+                }
             }
         }
+    }
+
+    if (showWorkStatus) {
+        WorkStatusSheet(
+            workInfos = workInfos,
+            onCancelWork = { viewModel.cancelWork(it) },
+            onDismiss = { showWorkStatus = false }
+        )
     }
 }
 
@@ -421,7 +439,9 @@ private fun EncryptTabContent(
     onNavigateToProgress: (String) -> Unit,
     onNavigateToHistory: () -> Unit,
     viewModel: MainViewModel,
-    currentTabIndex: Int
+    currentTabIndex: Int,
+    onShowWorkStatus: () -> Unit,
+    hasActiveWork: Boolean
 ) {
     var pickType by remember { mutableStateOf(PickType.NONE) }
     var selectedUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
@@ -597,6 +617,30 @@ private fun EncryptTabContent(
                 fontWeight = FontWeight.Bold
             )
             Row {
+                Box {
+                    IconButton(
+                        onClick = onShowWorkStatus,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CloudSync,
+                            contentDescription = "Background Tasks",
+                            modifier = Modifier.size(28.dp),
+                            tint = if (hasActiveWork) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    if (hasActiveWork) {
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 8.dp, end = 8.dp)
+                                .size(10.dp),
+                            shape = androidx.compose.foundation.shape.CircleShape,
+                            color = MaterialTheme.colorScheme.primary,
+                            border = BorderStroke(2.dp, MaterialTheme.colorScheme.surface)
+                        ) {}
+                    }
+                }
                 IconButton(
                     onClick = onNavigateToHistory,
                     modifier = Modifier.size(48.dp)

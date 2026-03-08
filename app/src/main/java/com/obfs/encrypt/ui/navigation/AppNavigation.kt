@@ -21,9 +21,12 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.obfs.encrypt.ui.screens.DecryptScreen
+import com.obfs.encrypt.ui.screens.EncryptionExplainerDialog
 import com.obfs.encrypt.ui.screens.FileBrowserScreen
+import com.obfs.encrypt.ui.screens.HelpScreen
 import com.obfs.encrypt.ui.screens.HistoryScreen
 import com.obfs.encrypt.ui.screens.HomeScreen
+import com.obfs.encrypt.ui.screens.OnboardingTutorialScreen
 import com.obfs.encrypt.ui.screens.ProgressScreen
 import com.obfs.encrypt.ui.screens.SettingsScreen
 import com.obfs.encrypt.ui.theme.Motion
@@ -43,6 +46,8 @@ sealed class Screen(val route: String) {
         fun createRoute(previousTabIndex: Int) = "settings/$previousTabIndex"
     }
     object History : Screen("history")
+    object Help : Screen("help")
+    object Onboarding : Screen("onboarding")
 }
 
 /**
@@ -178,6 +183,9 @@ fun AppNavigation(
                 onNavigateBack = { tabIndex ->
                     navController.previousBackStackEntry?.savedStateHandle?.set("restoreTabIndex", tabIndex)
                     navController.popBackStack()
+                },
+                onNavigateToHelp = {
+                    navController.navigate(Screen.Help.route)
                 }
             )
         }
@@ -223,6 +231,59 @@ fun AppNavigation(
         ) {
             HistoryScreen(
                 onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(
+            route = Screen.Help.route,
+            enterTransition = {
+                slideInHorizontally(
+                    initialOffsetX = { fullWidth -> fullWidth },
+                    animationSpec = spring(
+                        dampingRatio = 0.8f,
+                        stiffness = Spring.StiffnessLow
+                    )
+                ) + fadeIn(animationSpec = tween(350, delayMillis = 50))
+            },
+            exitTransition = {
+                slideOutHorizontally(
+                    targetOffsetX = { fullWidth -> fullWidth },
+                    animationSpec = spring(
+                        dampingRatio = 0.8f,
+                        stiffness = Spring.StiffnessLow
+                    )
+                ) + fadeOut(animationSpec = tween(300))
+            },
+            popEnterTransition = {
+                slideInHorizontally(
+                    initialOffsetX = { fullWidth -> -fullWidth },
+                    animationSpec = spring(
+                        dampingRatio = 0.8f,
+                        stiffness = Spring.StiffnessLow
+                    )
+                ) + fadeIn(animationSpec = tween(300))
+            },
+            popExitTransition = {
+                slideOutHorizontally(
+                    targetOffsetX = { fullWidth -> fullWidth },
+                    animationSpec = spring(
+                        dampingRatio = 0.8f,
+                        stiffness = Spring.StiffnessLow
+                    )
+                ) + fadeOut(animationSpec = tween(300))
+            }
+        ) {
+            HelpScreen(
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.Onboarding.route) {
+            OnboardingTutorialScreen(
+                onOnboardingComplete = {
+                    vm.completeOnboarding()
+                    navController.popBackStack()
+                }
             )
         }
     }

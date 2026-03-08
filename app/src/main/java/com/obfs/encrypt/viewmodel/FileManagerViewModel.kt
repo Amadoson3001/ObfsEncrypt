@@ -3,9 +3,11 @@ package com.obfs.encrypt.viewmodel
 import android.app.Application
 import android.content.Intent
 import android.os.Environment
+import android.os.storage.StorageManager
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.obfs.encrypt.data.AppDirectoryManager
 import com.obfs.encrypt.data.QuickAccessRepository
 import com.obfs.encrypt.data.RecentFoldersRepository
 import com.obfs.encrypt.data.SettingsRepository
@@ -43,10 +45,32 @@ class FileManagerViewModel @Inject constructor(
     application: Application,
     private val settingsRepository: SettingsRepository,
     private val quickAccessRepository: QuickAccessRepository,
-    private val recentFoldersRepository: RecentFoldersRepository
+    private val recentFoldersRepository: RecentFoldersRepository,
+    private val appDirectoryManager: AppDirectoryManager
 ) : AndroidViewModel(application) {
 
     private val rootDirectory = Environment.getExternalStorageDirectory()
+    
+    private val rootDirectories: List<File> by lazy {
+        val roots = mutableListOf<File>()
+        
+        roots.add(rootDirectory)
+        
+        appDirectoryManager.getAppDirectory()?.let { roots.add(it) }
+        
+        try {
+            val storageManager = application.getSystemService(StorageManager::class.java)
+            storageManager?.storageVolumes?.forEach { volume ->
+                volume.directory?.let { dir ->
+                    if (!roots.any { it.absolutePath.startsWith(dir.absolutePath) }) {
+                        roots.add(dir)
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        
+        roots
+    }
 
     private val _currentDirectory = MutableStateFlow(rootDirectory)
     val currentDirectory: StateFlow<File> = _currentDirectory.asStateFlow()
@@ -144,15 +168,27 @@ class FileManagerViewModel @Inject constructor(
         }
     }
 
+    fun canNavigateUp(): Boolean {
+        val current = _currentDirectory.value
+        return rootDirectories.any { root -> 
+            current.absolutePath != root.absolutePath && 
+            current.absolutePath.startsWith(root.absolutePath)
+        }
+    }
+
     fun navigateUp(): Boolean {
+        if (!canNavigateUp()) return false
+        
         val current = _currentDirectory.value
         val parent = current.parentFile
-        if (parent != null && parent.absolutePath.startsWith(Environment.getExternalStorageDirectory().parent ?: "")) {
-             loadDirectory(parent)
-             return true
+        if (parent != null) {
+            loadDirectory(parent)
+            return true
         }
-        return false // Can't go higher or reached the top
+        return false
     }
+
+    fun isAtRoot(): Boolean = !canNavigateUp()
 
     fun toggleSelection(file: File) {
         val currentSelected = _selectedItems.value.toMutableSet()

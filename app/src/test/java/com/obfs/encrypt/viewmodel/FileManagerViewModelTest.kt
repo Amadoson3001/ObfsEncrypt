@@ -88,7 +88,8 @@ class FileManagerViewModelTest {
             application = application,
             settingsRepository = settingsRepository,
             quickAccessRepository = quickAccessRepository,
-            recentFoldersRepository = recentFoldersRepository
+            recentFoldersRepository = recentFoldersRepository,
+            appDirectoryManager = mockk()
         )
     }
 

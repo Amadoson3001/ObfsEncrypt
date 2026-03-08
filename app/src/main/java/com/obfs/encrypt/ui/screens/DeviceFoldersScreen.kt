@@ -260,10 +260,7 @@ fun DeviceFoldersScreen(
                             }
                         },
                         navigationIcon = {
-                            val root = Environment.getExternalStorageDirectory()
-                            if (currentDirectory.absolutePath != root.absolutePath &&
-                                currentDirectory.absolutePath.startsWith(root.absolutePath)
-                            ) {
+                            if (fileManagerViewModel.canNavigateUp()) {
                                 IconButton(onClick = { fileManagerViewModel.navigateUp() }) {
                                     Icon(
                                         Icons.AutoMirrored.Filled.ArrowBack,

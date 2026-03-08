@@ -5,8 +5,10 @@ import android.net.Uri
 import androidx.work.*
 import com.google.gson.Gson
 import com.obfs.encrypt.crypto.EncryptionMethod
+import com.obfs.encrypt.security.SecureKeyStore
 import com.obfs.encrypt.services.EncryptionWorker
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -14,7 +16,8 @@ import kotlinx.coroutines.flow.map
 
 @Singleton
 class BatchEncryptionManager @Inject constructor(
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context,
+    private val secureKeyStore: SecureKeyStore
 ) {
     private val workManager = WorkManager.getInstance(context)
     private val gson = Gson()
@@ -27,12 +30,25 @@ class BatchEncryptionManager @Inject constructor(
         deleteOriginal: Boolean = false,
         enableIntegrity: Boolean = false
     ): String {
+        // Initialize KeyStore if not already
+        if (!secureKeyStore.isInitialized()) {
+            secureKeyStore.initialize()
+        }
+
+        // Encrypt password securely
+        val encryptedPassword = secureKeyStore.encryptPassword(password)
+            ?: throw SecurityException("Failed to encrypt password for batch operation")
+
+        // Save encrypted password to a temporary file
+        val tempPasswordFile = File(context.cacheDir, "obfs_batch_${System.currentTimeMillis()}.bin")
+        tempPasswordFile.writeText(gson.toJson(encryptedPassword))
+
         val urisJson = gson.toJson(uris.map { it.toString() })
         
         val inputData = workDataOf(
             EncryptionWorker.KEY_OPERATION to operation,
             EncryptionWorker.KEY_FILE_URIS to urisJson,
-            EncryptionWorker.KEY_PASSWORD to String(password),
+            EncryptionWorker.KEY_PASSWORD_FILE to tempPasswordFile.absolutePath,
             EncryptionWorker.KEY_METHOD to method.name,
             EncryptionWorker.KEY_DELETE_ORIGINAL to deleteOriginal,
             EncryptionWorker.KEY_ENABLE_INTEGRITY to enableIntegrity

@@ -39,6 +39,11 @@ import androidx.compose.ui.unit.dp
 import com.obfs.encrypt.R
 import com.obfs.encrypt.ui.theme.pressClickEffect
 
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Notifications
+
 /**
  * Permission Dialog - Explains why storage permission is needed
  * 
@@ -64,7 +69,7 @@ fun PermissionDialog(
         },
         title = {
             Text(
-                text = stringResource(R.string.storage_access_required),
+                text = stringResource(R.string.permissions_required),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold
             )
@@ -90,12 +95,14 @@ fun PermissionDialog(
                     title = stringResource(R.string.save_encrypted_files),
                     description = stringResource(R.string.save_encrypted_files_description)
                 )
-                
-                PermissionFeatureItem(
-                    icon = Icons.Default.Storage,
-                    title = stringResource(R.string.manage_output_folder),
-                    description = stringResource(R.string.manage_output_folder_description)
-                )
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    PermissionFeatureItem(
+                        icon = Icons.Default.Notifications,
+                        title = "Background Progress",
+                        description = "Receive notifications about your background encryption/decryption status."
+                    )
+                }
                 
                 Spacer(modifier = Modifier.height(8.dp))
                 

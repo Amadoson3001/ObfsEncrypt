@@ -9,14 +9,18 @@ import com.obfs.encrypt.crypto.DecryptionResult
 import com.obfs.encrypt.crypto.EncryptionHelper
 import com.obfs.encrypt.crypto.EncryptionMethod
 import com.obfs.encrypt.data.AppDirectoryManager
+import com.obfs.encrypt.data.FileEncryptionManager
 import com.obfs.encrypt.data.EncryptionHistoryItem
 import com.obfs.encrypt.data.EncryptionHistoryRepository
 import com.obfs.encrypt.data.SecureDelete
+import com.obfs.encrypt.data.ProgressState
+import com.obfs.encrypt.data.RecentFoldersRepository
 import com.obfs.encrypt.data.SettingsRepository
 import com.obfs.encrypt.data.createHistoryItem
 import com.obfs.encrypt.data.formatFileSize
 import com.obfs.encrypt.security.AppPasswordManager
 import com.obfs.encrypt.security.BiometricAuthManager
+import com.obfs.encrypt.services.CryptoService
 import com.obfs.encrypt.ui.theme.AppTheme
 import com.obfs.encrypt.ui.theme.ThemeMode
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -24,28 +28,47 @@ import java.io.File
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
-    application: Application,
+    private val application: Application,
     private val encryptionHelper: EncryptionHelper,
     private val settingsRepository: SettingsRepository,
     private val appDirectoryManager: AppDirectoryManager,
     private val historyRepository: EncryptionHistoryRepository,
     val biometricAuthManager: BiometricAuthManager,
     val appPasswordManager: AppPasswordManager,
-    private val batchEncryptionManager: com.obfs.encrypt.data.BatchEncryptionManager
+    private val batchEncryptionManager: com.obfs.encrypt.data.BatchEncryptionManager,
+    private val fileEncryptionManager: FileEncryptionManager
 ) : AndroidViewModel(application) {
 
     private val BATCH_THRESHOLD = 5
+    private val workManager = WorkManager.getInstance(application)
 
     private val _progress = MutableStateFlow(0f)
     val progress: StateFlow<Float> = _progress.asStateFlow()
+
+    private val _progressState = MutableStateFlow(ProgressState())
+    val progressState: StateFlow<ProgressState> = _progressState.asStateFlow()
+
+    // WorkManager observation
+    private val _batchWorkInfo = MutableStateFlow<List<WorkInfo>>(emptyList())
+    val batchWorkInfo: StateFlow<List<WorkInfo>> = _batchWorkInfo.asStateFlow()
+
+    private val _isPaused = MutableStateFlow(false)
+    val isPaused: StateFlow<Boolean> = _isPaused.asStateFlow()
 
     private val _statusMessage = MutableStateFlow("")
     val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
@@ -94,6 +117,10 @@ class MainViewModel @Inject constructor(
     private val _language = MutableStateFlow("system")
     val language: StateFlow<String> = _language.asStateFlow()
 
+    // Onboarding state
+    private val _onboardingCompleted = MutableStateFlow(false)
+    val onboardingCompleted: StateFlow<Boolean> = _onboardingCompleted.asStateFlow()
+
     // Encryption history
     private val _encryptionHistory = MutableStateFlow<List<EncryptionHistoryItem>>(emptyList())
     val encryptionHistory: StateFlow<List<EncryptionHistoryItem>> = _encryptionHistory.asStateFlow()
@@ -107,7 +134,27 @@ class MainViewModel @Inject constructor(
 
     private var currentJob: Job? = null
 
+    private val serviceReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                CryptoService.ACTION_BROADCAST_CANCEL -> cancelOperation()
+                CryptoService.ACTION_BROADCAST_PAUSE -> togglePause()
+            }
+        }
+    }
+
     init {
+        val filter = IntentFilter().apply {
+            addAction(CryptoService.ACTION_BROADCAST_CANCEL)
+            addAction(CryptoService.ACTION_BROADCAST_PAUSE)
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            application.registerReceiver(serviceReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            application.registerReceiver(serviceReceiver, filter)
+        }
+        
         viewModelScope.launch {
             settingsRepository.secureDeleteOriginals.collect { enabled ->
                 _secureDeleteOriginals.value = enabled
@@ -154,10 +201,29 @@ class MainViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            settingsRepository.onboardingCompleted.collect { completed ->
+                _onboardingCompleted.value = completed
+            }
+        }
+        viewModelScope.launch {
             historyRepository.historyItems.collect { items ->
                 _encryptionHistory.value = items
             }
         }
+
+        // Collect WorkManager batch info
+        viewModelScope.launch {
+            workManager.getWorkInfosByTagFlow("batch_operation").collect { workInfos ->
+                _batchWorkInfo.value = workInfos
+            }
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        try {
+            application.unregisterReceiver(serviceReceiver)
+        } catch (e: Exception) {}
     }
 
     fun toggleSecureDelete(enabled: Boolean) {
@@ -183,6 +249,11 @@ class MainViewModel @Inject constructor(
     fun setLanguage(language: String) {
         _language.value = language
         viewModelScope.launch { settingsRepository.setLanguage(language) }
+    }
+
+    fun completeOnboarding() {
+        _onboardingCompleted.value = true
+        viewModelScope.launch { settingsRepository.setOnboardingCompleted(true) }
     }
 
     fun setDynamicColor(enabled: Boolean) {
@@ -228,6 +299,59 @@ class MainViewModel @Inject constructor(
         _isOperationActive.value = false
         _statusMessage.value = "Operation Cancelled"
         _progress.value = 0f
+        _progressState.value = ProgressState()
+        _isPaused.value = false
+        CryptoService.stopService(application)
+    }
+
+    fun togglePause() {
+        _isPaused.value = !_isPaused.value
+        _progressState.value = _progressState.value.copy(isPaused = _isPaused.value)
+    }
+
+    private fun updateProgressState(
+        current: Long,
+        total: Long,
+        startTime: Long,
+        fileName: String? = null,
+        totalFiles: Int = 0,
+        currentFileIndex: Int = 0,
+        isIndeterminate: Boolean = false
+    ) {
+        val progress = if (total > 0) (current.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0f
+        _progress.value = progress
+
+        val currentTime = System.currentTimeMillis()
+        val elapsedTimeMs = currentTime - startTime
+        
+        val speed = if (elapsedTimeMs > 0) {
+            (current * 1000) / elapsedTimeMs
+        } else 0L
+
+        val eta = if (speed > 0 && total > current) {
+            (total - current) / speed
+        } else -1L
+
+        _progressState.value = _progressState.value.copy(
+            progress = progress,
+            etaSeconds = eta,
+            speedBytesPerSecond = speed,
+            currentFile = fileName ?: _progressState.value.currentFile,
+            totalFiles = totalFiles,
+            currentFileIndex = currentFileIndex,
+            processedBytes = current,
+            totalBytes = total,
+            isIndeterminate = isIndeterminate,
+            isPaused = _isPaused.value
+        )
+        
+        // Update notification
+        CryptoService.updateProgress(
+            context = application,
+            progress = (progress * 100).toInt(),
+            status = if (totalFiles > 1) "File $currentFileIndex/$totalFiles: $fileName" else fileName ?: "Processing...",
+            isPaused = _isPaused.value
+        )
     }
 
     // ─── Biometric Password Management ─────────────────────────────────────────
@@ -328,6 +452,9 @@ class MainViewModel @Inject constructor(
         currentJob = viewModelScope.launch(Dispatchers.IO) {
             _isOperationActive.value = true
             _progress.value = 0f
+            _isPaused.value = false
+            _progressState.value = ProgressState(totalFiles = uris.size)
+            CryptoService.startService(application)
             try {
                 // Read keyfile if set
                 val keyfileBytes = _keyfileUri.value?.let { readKeyfile(it) }
@@ -336,9 +463,23 @@ class MainViewModel @Inject constructor(
                     _statusMessage.value = "Encrypting file ${index + 1} of ${uris.size}..."
                     val fileName = getFileNameFromUri(uri)
                     val fileSize = getFileSizeFromUri(uri)
+                    
+                    _progressState.value = _progressState.value.copy(
+                        currentFile = fileName,
+                        currentFileIndex = index + 1
+                    )
 
                     try {
-                        processSingleEncryption(uri, password, method, deleteOriginal, keyfileBytes, enableIntegrityCheck)
+                        processSingleEncryption(
+                            uri = uri, 
+                            password = password, 
+                            method = method, 
+                            deleteOriginal = deleteOriginal, 
+                            keyfileBytes = keyfileBytes, 
+                            enableIntegrityCheck = enableIntegrityCheck,
+                            currentFileIndex = index + 1,
+                            totalFiles = uris.size
+                        )
                         // Add to history on success
                         historyRepository.addHistoryItem(
                             createHistoryItem(
@@ -375,6 +516,7 @@ class MainViewModel @Inject constructor(
             } finally {
                 password.fill('0')
                 _isOperationActive.value = false
+                CryptoService.stopService(application)
             }
         }
     }
@@ -389,17 +531,29 @@ class MainViewModel @Inject constructor(
         currentJob = viewModelScope.launch(Dispatchers.IO) {
             _isOperationActive.value = true
             _progress.value = 0f
+            _isPaused.value = false
+            CryptoService.startService(application)
             try {
                 // Read keyfile if set
                 val keyfileBytes = _keyfileUri.value?.let { readKeyfile(it) }
 
-                val rootFolder = DocumentFile.fromTreeUri(getApplication(), treeUri)
+                val rootFolder = DocumentFile.fromTreeUri(application, treeUri)
                 if (rootFolder != null && rootFolder.isDirectory) {
                     val files = mutableListOf<DocumentFile>()
                     collectDocumentFiles(rootFolder, files)
+                    _progressState.value = ProgressState(totalFiles = files.size)
                     files.forEachIndexed { index, file ->
                         _statusMessage.value = "Encrypting ${file.name} (${index + 1}/${files.size})"
-                        processSingleEncryption(file.uri, password, method, deleteOriginal, keyfileBytes, enableIntegrityCheck)
+                        processSingleEncryption(
+                            uri = file.uri, 
+                            password = password, 
+                            method = method, 
+                            deleteOriginal = deleteOriginal, 
+                            keyfileBytes = keyfileBytes, 
+                            enableIntegrityCheck = enableIntegrityCheck,
+                            currentFileIndex = index + 1,
+                            totalFiles = files.size
+                        )
                     }
                     _statusMessage.value = "Folder Encryption Complete!"
                     _progress.value = 1f
@@ -412,6 +566,7 @@ class MainViewModel @Inject constructor(
             } finally {
                 password.fill('0')
                 _isOperationActive.value = false
+                CryptoService.stopService(application)
             }
         }
     }
@@ -439,13 +594,29 @@ class MainViewModel @Inject constructor(
         currentJob = viewModelScope.launch(Dispatchers.IO) {
             _isOperationActive.value = true
             _progress.value = 0f
+            _isPaused.value = false
+            _progressState.value = ProgressState(totalFiles = uris.size)
+            CryptoService.startService(application)
             try {
                 // Read keyfile if set
                 val keyfileBytes = _keyfileUri.value?.let { readKeyfile(it) }
                 
                 uris.forEachIndexed { index, uri ->
                     _statusMessage.value = "Decrypting file ${index + 1} of ${uris.size}..."
-                    val result = processSingleDecryption(uri, password, deleteOriginal, keyfileBytes, verifyIntegrity)
+                    val fileName = getFileNameFromUri(uri)
+                    _progressState.value = _progressState.value.copy(
+                        currentFile = fileName,
+                        currentFileIndex = index + 1
+                    )
+                    val result = processSingleDecryption(
+                        uri = uri, 
+                        password = password, 
+                        deleteOriginal = deleteOriginal, 
+                        keyfileBytes = keyfileBytes, 
+                        verifyIntegrity = verifyIntegrity,
+                        currentFileIndex = index + 1,
+                        totalFiles = uris.size
+                    )
                     _lastDecryptionResult.value = result
                 }
                 _statusMessage.value = "Decryption Complete!"
@@ -455,6 +626,7 @@ class MainViewModel @Inject constructor(
             } finally {
                 password.fill('0')
                 _isOperationActive.value = false
+                CryptoService.stopService(application)
             }
         }
     }
@@ -470,6 +642,8 @@ class MainViewModel @Inject constructor(
         currentJob = viewModelScope.launch(Dispatchers.IO) {
             _isOperationActive.value = true
             _progress.value = 0f
+            _isPaused.value = false
+            CryptoService.startService(application)
             try {
                 // Read keyfile if set
                 val keyfileBytes = _keyfileUri.value?.let { readKeyfile(it) }
@@ -480,9 +654,11 @@ class MainViewModel @Inject constructor(
                 if (allFiles.isEmpty()) {
                     _statusMessage.value = "No files to encrypt"
                     _isOperationActive.value = false
+                    CryptoService.stopService(application)
                     return@launch
                 }
 
+                _progressState.value = ProgressState(totalFiles = allFiles.size)
                 allFiles.forEachIndexed { index, file ->
                     if (!file.exists()) {
                         _statusMessage.value = "File not found: ${file.name}"
@@ -493,7 +669,20 @@ class MainViewModel @Inject constructor(
                         return@forEachIndexed
                     }
                     _statusMessage.value = "Encrypting file ${index + 1} of ${allFiles.size}..."
-                    processDirectEncryption(file, password, method, deleteOriginal, keyfileBytes, enableIntegrityCheck)
+                    _progressState.value = _progressState.value.copy(
+                        currentFile = file.name,
+                        currentFileIndex = index + 1
+                    )
+                    processDirectEncryption(
+                        file = file, 
+                        password = password, 
+                        method = method, 
+                        deleteOriginal = deleteOriginal, 
+                        keyfileBytes = keyfileBytes, 
+                        enableIntegrityCheck = enableIntegrityCheck,
+                        currentFileIndex = index + 1,
+                        totalFiles = allFiles.size
+                    )
                 }
                 _statusMessage.value = "Encryption Complete!"
                 _progress.value = 1f
@@ -503,6 +692,7 @@ class MainViewModel @Inject constructor(
             } finally {
                 password.fill('0')
                 _isOperationActive.value = false
+                CryptoService.stopService(application)
             }
         }
     }
@@ -517,6 +707,8 @@ class MainViewModel @Inject constructor(
         currentJob = viewModelScope.launch(Dispatchers.IO) {
             _isOperationActive.value = true
             _progress.value = 0f
+            _isPaused.value = false
+            CryptoService.startService(application)
             try {
                 // Read keyfile if set
                 val keyfileBytes = _keyfileUri.value?.let { readKeyfile(it) }
@@ -527,9 +719,11 @@ class MainViewModel @Inject constructor(
                 if (allFiles.isEmpty()) {
                     _statusMessage.value = "No files to decrypt"
                     _isOperationActive.value = false
+                    CryptoService.stopService(application)
                     return@launch
                 }
 
+                _progressState.value = ProgressState(totalFiles = allFiles.size)
                 allFiles.forEachIndexed { index, file ->
                     if (!file.exists()) {
                         _statusMessage.value = "File not found: ${file.name}"
@@ -540,7 +734,19 @@ class MainViewModel @Inject constructor(
                         return@forEachIndexed
                     }
                     _statusMessage.value = "Decrypting file ${index + 1} of ${allFiles.size}..."
-                    val result = processDirectDecryption(file, password, deleteOriginal, keyfileBytes, verifyIntegrity)
+                    _progressState.value = _progressState.value.copy(
+                        currentFile = file.name,
+                        currentFileIndex = index + 1
+                    )
+                    val result = processDirectDecryption(
+                        file = file, 
+                        password = password, 
+                        deleteOriginal = deleteOriginal, 
+                        keyfileBytes = keyfileBytes, 
+                        verifyIntegrity = verifyIntegrity,
+                        currentFileIndex = index + 1,
+                        totalFiles = allFiles.size
+                    )
                     _lastDecryptionResult.value = result
                 }
                 _statusMessage.value = "Decryption Complete!"
@@ -551,6 +757,7 @@ class MainViewModel @Inject constructor(
             } finally {
                 password.fill('0')
                 _isOperationActive.value = false
+                CryptoService.stopService(application)
             }
         }
     }
@@ -606,38 +813,39 @@ class MainViewModel @Inject constructor(
         method: EncryptionMethod = EncryptionMethod.STANDARD, 
         deleteOriginal: Boolean = false,
         keyfileBytes: ByteArray? = null,
-        enableIntegrityCheck: Boolean = false
+        enableIntegrityCheck: Boolean = false,
+        currentFileIndex: Int = 0,
+        totalFiles: Int = 0
     ) {
         val app = getApplication<Application>()
-        val cr = app.contentResolver
+        val fileName = getFileNameFromUri(uri)
         val sourceFile = DocumentFile.fromSingleUri(app, uri)
             ?: throw IllegalArgumentException("Could not read source file")
 
-        val mimeType = "application/octet-stream"
-        var outName = "${sourceFile.name ?: "File_${System.currentTimeMillis()}"}.obfs"
-        val fileSize = sourceFile.length()
-
-        val inStream = cr.openInputStream(sourceFile.uri)
-            ?: throw IllegalStateException("Could not open source file for reading")
-
-        val outStream: java.io.OutputStream = buildEncryptOutputStream(
-            app = app,
-            outName = outName,
-            mimeType = mimeType,
-            safParent = sourceFile.parentFile
+        val outputUri = fileEncryptionManager.createOutputFile(
+            inputUri = uri,
+            encrypt = true,
+            customOutputDirUri = _currentOutputUri.value
         )
 
-        encryptionHelper.encrypt(
-            inputStream = inStream,
-            outputStream = outStream,
+        fileEncryptionManager.encryptUri(
+            sourceUri = uri,
+            outputUri = outputUri,
             password = password,
             method = method,
-            progressCallback = { current, total, _ ->
-                _progress.value = (current.toFloat() / total.toFloat()).coerceIn(0.001f, 1f)
-            },
-            totalSize = fileSize,
+            enableIntegrityCheck = enableIntegrityCheck,
             keyfileBytes = keyfileBytes,
-            enableIntegrityCheck = enableIntegrityCheck
+            isPaused = _isPaused.asStateFlow(),
+            progressCallback = { current, total, startTime ->
+                updateProgressState(
+                    current = current,
+                    total = total,
+                    startTime = startTime,
+                    fileName = fileName,
+                    currentFileIndex = currentFileIndex,
+                    totalFiles = totalFiles
+                )
+            }
         )
 
         if (deleteOriginal) {
@@ -654,36 +862,38 @@ class MainViewModel @Inject constructor(
         password: CharArray, 
         deleteOriginal: Boolean = false,
         keyfileBytes: ByteArray? = null,
-        verifyIntegrity: Boolean = true
+        verifyIntegrity: Boolean = true,
+        currentFileIndex: Int = 0,
+        totalFiles: Int = 0
     ): DecryptionResult {
         val app = getApplication<Application>()
-        val cr = app.contentResolver
-        val sourceFile = DocumentFile.fromSingleUri(app, uri) ?: throw IllegalArgumentException("Cannot read source file")
+        val fileName = getFileNameFromUri(uri)
+        val sourceFile = DocumentFile.fromSingleUri(app, uri) 
+            ?: throw IllegalArgumentException("Cannot read source file")
 
-        val outName = sourceFile.name?.removeSuffix(".obfs")
-            ?: "Decrypted_${System.currentTimeMillis()}"
-        val fileSize = sourceFile.length()
-
-        val inStream = cr.openInputStream(sourceFile.uri)
-            ?: throw IllegalStateException("Could not open source file for reading")
-
-        val outStream: java.io.OutputStream = buildDecryptOutputStream(
-            app = app,
-            outName = outName,
-            safParent = sourceFile.parentFile
+        val outputUri = fileEncryptionManager.createOutputFile(
+            inputUri = uri,
+            encrypt = false,
+            customOutputDirUri = _currentOutputUri.value
         )
 
-        val result = encryptionHelper.decrypt(
-            inputStream = inStream,
-            outputStream = outStream,
+        val result = fileEncryptionManager.decryptUri(
+            sourceUri = uri,
+            outputUri = outputUri,
             password = password,
-            method = EncryptionMethod.STANDARD,
-            progressCallback = { current, total, _ ->
-                _progress.value = (current.toFloat() / total.toFloat()).coerceIn(0.001f, 1f)
-            },
-            totalSize = fileSize,
+            verifyIntegrity = verifyIntegrity,
             keyfileBytes = keyfileBytes,
-            verifyIntegrity = verifyIntegrity
+            isPaused = _isPaused.asStateFlow(),
+            progressCallback = { current, total, startTime ->
+                updateProgressState(
+                    current = current,
+                    total = total,
+                    startTime = startTime,
+                    fileName = fileName,
+                    currentFileIndex = currentFileIndex,
+                    totalFiles = totalFiles
+                )
+            }
         )
 
         if (deleteOriginal) {
@@ -703,7 +913,9 @@ class MainViewModel @Inject constructor(
         method: EncryptionMethod = EncryptionMethod.STANDARD,
         deleteOriginal: Boolean = false,
         keyfileBytes: ByteArray? = null,
-        enableIntegrityCheck: Boolean = false
+        enableIntegrityCheck: Boolean = false,
+        currentFileIndex: Int = 0,
+        totalFiles: Int = 0
     ) {
         val app = getApplication<Application>()
         val mimeType = "application/octet-stream"
@@ -735,12 +947,20 @@ class MainViewModel @Inject constructor(
                         outputStream = os,
                         password = password,
                         method = method,
-                        progressCallback = { current, total, _ ->
-                            _progress.value = (current.toFloat() / total.toFloat()).coerceIn(0.001f, 1f)
+                        progressCallback = { current, total, startTime ->
+                            updateProgressState(
+                                current = current,
+                                total = total,
+                                startTime = startTime,
+                                fileName = file.name,
+                                currentFileIndex = currentFileIndex,
+                                totalFiles = totalFiles
+                            )
                         },
                         totalSize = fileSize,
                         keyfileBytes = keyfileBytes,
-                        enableIntegrityCheck = enableIntegrityCheck
+                        enableIntegrityCheck = enableIntegrityCheck,
+                        isPaused = _isPaused.asStateFlow()
                     )
                 }
             }
@@ -763,7 +983,9 @@ class MainViewModel @Inject constructor(
         password: CharArray,
         deleteOriginal: Boolean = false,
         keyfileBytes: ByteArray? = null,
-        verifyIntegrity: Boolean = true
+        verifyIntegrity: Boolean = true,
+        currentFileIndex: Int = 0,
+        totalFiles: Int = 0
     ): DecryptionResult {
         val app = getApplication<Application>()
         val outName = file.name.removeSuffix(".obfs").ifEmpty { "Decrypted_${System.currentTimeMillis()}" }
@@ -794,12 +1016,20 @@ class MainViewModel @Inject constructor(
                         outputStream = os,
                         password = password,
                         method = EncryptionMethod.STANDARD,
-                        progressCallback = { current, total, _ ->
-                            _progress.value = (current.toFloat() / total.toFloat()).coerceIn(0.001f, 1f)
+                        progressCallback = { current, total, startTime ->
+                            updateProgressState(
+                                current = current,
+                                total = total,
+                                startTime = startTime,
+                                fileName = file.name,
+                                currentFileIndex = currentFileIndex,
+                                totalFiles = totalFiles
+                            )
                         },
                         totalSize = fileSize,
                         keyfileBytes = keyfileBytes,
-                        verifyIntegrity = verifyIntegrity
+                        verifyIntegrity = verifyIntegrity,
+                        isPaused = _isPaused.asStateFlow()
                     )
                 }
             }
@@ -814,69 +1044,6 @@ class MainViewModel @Inject constructor(
         }
         
         return result
-    }
-
-    // ─── Output stream builders ────────────────────────────────────────────────
-
-    private fun buildEncryptOutputStream(
-        app: Application,
-        outName: String,
-        mimeType: String,
-        safParent: DocumentFile?
-    ): java.io.OutputStream {
-        val safUri = _currentOutputUri.value
-
-        if (safUri != null) {
-            val dir = DocumentFile.fromTreeUri(app, safUri)
-                ?: throw IllegalStateException("Output directory not found or not writable")
-            val target = dir.createFile(mimeType, outName)
-                ?: throw IllegalStateException("Cannot create output file in SAF directory")
-            return app.contentResolver.openOutputStream(target.uri)
-                ?: throw IllegalStateException("Could not open output stream")
-        }
-
-        if (safParent != null && safParent.canWrite()) {
-            val target = safParent.createFile(mimeType, outName)
-            if (target != null) {
-                val stream = app.contentResolver.openOutputStream(target.uri)
-                if (stream != null) return stream
-                target.delete()
-            }
-        }
-
-        val fallbackDir = appDirectoryManager.getOutputDirectory()
-            ?: throw IllegalStateException("Could not access default output directory")
-        return java.io.FileOutputStream(uniqueFile(fallbackDir, outName))
-    }
-
-    private fun buildDecryptOutputStream(
-        app: Application,
-        outName: String,
-        safParent: DocumentFile?
-    ): java.io.OutputStream {
-        val safUri = _currentOutputUri.value
-
-        if (safUri != null) {
-            val dir = DocumentFile.fromTreeUri(app, safUri)
-                ?: throw IllegalStateException("Output directory not found or not writable")
-            val target = dir.createFile("*/*", outName)
-                ?: throw IllegalStateException("Cannot create output file in SAF directory")
-            return app.contentResolver.openOutputStream(target.uri)
-                ?: throw IllegalStateException("Could not open output stream")
-        }
-
-        if (safParent != null && safParent.canWrite()) {
-            val target = safParent.createFile("*/*", outName)
-            if (target != null) {
-                val stream = app.contentResolver.openOutputStream(target.uri)
-                if (stream != null) return stream
-                target.delete()
-            }
-        }
-
-        val fallbackDir = appDirectoryManager.getOutputDirectory()
-            ?: throw IllegalStateException("Could not access default output directory")
-        return java.io.FileOutputStream(uniqueFile(fallbackDir, outName))
     }
 
     // ─── Utilities ─────────────────────────────────────────────────────────────
@@ -945,5 +1112,9 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch {
             historyRepository.removeItem(itemId)
         }
+    }
+
+    fun cancelWork(id: java.util.UUID) {
+        workManager.cancelWorkById(id)
     }
 }

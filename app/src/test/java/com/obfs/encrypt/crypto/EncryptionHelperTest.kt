@@ -3,19 +3,31 @@ package com.obfs.encrypt.crypto
 import com.google.common.truth.Truth.assertThat
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 /**
  * Unit tests for EncryptionHelper.
- * 
+ *
  * These tests verify the correctness of encryption/decryption operations,
  * header HMAC verification, and integrity checks.
+ *
+ * STREAMING DECRYPTION TESTS:
+ * Tests specifically for the streaming decryption implementation that avoids
+ * OutOfMemoryError by processing data in chunks instead of buffering everything.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class EncryptionHelperTest {
+
+    @get:Rule
+    val tempFolder = TemporaryFolder()
 
     private lateinit var encryptionHelper: EncryptionHelper
 
@@ -187,7 +199,7 @@ class EncryptionHelperTest {
         // Then - Decrypt
         val decryptedStream = ByteArrayOutputStream()
         val encryptedInputStream = ByteArrayInputStream(outputStream.toByteArray())
-        
+
         encryptionHelper.decrypt(
             inputStream = encryptedInputStream,
             outputStream = decryptedStream,
@@ -199,6 +211,345 @@ class EncryptionHelperTest {
         // Verify
         assertThat(decryptedStream.toByteArray()).isEqualTo(originalData)
     }
+
+    // region: Streaming Decryption Tests (OOM Prevention)
+
+    @Test
+    fun testStreamingDecryption_10MB_WithIntegrityCheck_Success() = runTest {
+        // Test streaming decryption with 10MB file and integrity check enabled
+        // This verifies the fix for OutOfMemoryError by using MessageDigest streaming
+        val originalData = ByteArray(10 * 1024 * 1024) { (it % 256).toByte() }
+        val password = "streamingTest10MB".toCharArray()
+        val outputStream = ByteArrayOutputStream()
+        val inputStream = ByteArrayInputStream(originalData)
+
+        // Encrypt with integrity check
+        encryptionHelper.encrypt(
+            inputStream = inputStream,
+            outputStream = outputStream,
+            password = password,
+            method = EncryptionMethod.STANDARD,
+            progressCallback = { _, _, _ -> },
+            totalSize = originalData.size.toLong(),
+            enableIntegrityCheck = true
+        )
+
+        // Decrypt with integrity verification - should NOT cause OOM
+        val decryptedStream = ByteArrayOutputStream()
+        val encryptedInputStream = ByteArrayInputStream(outputStream.toByteArray())
+
+        val result = encryptionHelper.decrypt(
+            inputStream = encryptedInputStream,
+            outputStream = decryptedStream,
+            password = password,
+            progressCallback = { _, _, _ -> },
+            totalSize = outputStream.size().toLong(),
+            verifyIntegrity = true
+        )
+
+        // Verify decryption succeeded
+        assertThat(result.success).isTrue()
+        assertThat(result.integrityResult?.isValid).isTrue()
+        assertThat(decryptedStream.toByteArray()).isEqualTo(originalData)
+    }
+
+    @Test
+    fun testStreamingDecryption_15MB_WithoutIntegrityCheck_Success() = runTest {
+        // Test streaming decryption with 15MB file without integrity check
+        val originalData = ByteArray(15 * 1024 * 1024) { (it % 256).toByte() }
+        val password = "streamingTest15MB".toCharArray()
+        val outputStream = ByteArrayOutputStream()
+        val inputStream = ByteArrayInputStream(originalData)
+
+        // Encrypt without integrity check
+        encryptionHelper.encrypt(
+            inputStream = inputStream,
+            outputStream = outputStream,
+            password = password,
+            method = EncryptionMethod.STANDARD,
+            progressCallback = { _, _, _ -> },
+            totalSize = originalData.size.toLong(),
+            enableIntegrityCheck = false
+        )
+
+        // Decrypt - streaming should work without buffering
+        val decryptedStream = ByteArrayOutputStream()
+        val encryptedInputStream = ByteArrayInputStream(outputStream.toByteArray())
+
+        val result = encryptionHelper.decrypt(
+            inputStream = encryptedInputStream,
+            outputStream = decryptedStream,
+            password = password,
+            progressCallback = { _, _, _ -> },
+            totalSize = outputStream.size().toLong(),
+            verifyIntegrity = false
+        )
+
+        assertThat(result.success).isTrue()
+        assertThat(decryptedStream.toByteArray()).isEqualTo(originalData)
+    }
+
+    @Test
+    fun testStreamingDecryption_MultiChunkFile_Success() = runTest {
+        // Test file that spans multiple chunks (each chunk is 1MB)
+        // This ensures chunk boundary handling is correct
+        val originalData = ByteArray(3 * 1024 * 1024 + 500 * 1024) { (it % 256).toByte() } // 3.5MB
+        val password = "multiChunkTest".toCharArray()
+        val outputStream = ByteArrayOutputStream()
+        val inputStream = ByteArrayInputStream(originalData)
+
+        encryptionHelper.encrypt(
+            inputStream = inputStream,
+            outputStream = outputStream,
+            password = password,
+            method = EncryptionMethod.STANDARD,
+            progressCallback = { _, _, _ -> },
+            totalSize = originalData.size.toLong(),
+            enableIntegrityCheck = true
+        )
+
+        val decryptedStream = ByteArrayOutputStream()
+        val encryptedInputStream = ByteArrayInputStream(outputStream.toByteArray())
+
+        val result = encryptionHelper.decrypt(
+            inputStream = encryptedInputStream,
+            outputStream = decryptedStream,
+            password = password,
+            progressCallback = { _, _, _ -> },
+            totalSize = outputStream.size().toLong(),
+            verifyIntegrity = true
+        )
+
+        assertThat(result.success).isTrue()
+        assertThat(result.integrityResult?.isValid).isTrue()
+        assertThat(decryptedStream.toByteArray()).isEqualTo(originalData)
+    }
+
+    @Test
+    fun testStreamingDecryption_ExactlyOneChunk_Success() = runTest {
+        // Test file that is exactly 1MB (one chunk)
+        val originalData = ByteArray(1 * 1024 * 1024) { (it % 256).toByte() }
+        val password = "exactlyOneChunk".toCharArray()
+        val outputStream = ByteArrayOutputStream()
+        val inputStream = ByteArrayInputStream(originalData)
+
+        encryptionHelper.encrypt(
+            inputStream = inputStream,
+            outputStream = outputStream,
+            password = password,
+            method = EncryptionMethod.STANDARD,
+            progressCallback = { _, _, _ -> },
+            totalSize = originalData.size.toLong(),
+            enableIntegrityCheck = true
+        )
+
+        val decryptedStream = ByteArrayOutputStream()
+        val encryptedInputStream = ByteArrayInputStream(outputStream.toByteArray())
+
+        val result = encryptionHelper.decrypt(
+            inputStream = encryptedInputStream,
+            outputStream = decryptedStream,
+            password = password,
+            progressCallback = { _, _, _ -> },
+            totalSize = outputStream.size().toLong(),
+            verifyIntegrity = true
+        )
+
+        assertThat(result.success).isTrue()
+        assertThat(result.integrityResult?.isValid).isTrue()
+        assertThat(decryptedStream.toByteArray()).isEqualTo(originalData)
+    }
+
+    @Test
+    fun testStreamingDecryption_JustOverOneChunk_Success() = runTest {
+        // Test file that is 1MB + 1 byte (tests chunk boundary + 1)
+        val originalData = ByteArray(1 * 1024 * 1024 + 1) { (it % 256).toByte() }
+        val password = "justOverOneChunk".toCharArray()
+        val outputStream = ByteArrayOutputStream()
+        val inputStream = ByteArrayInputStream(originalData)
+
+        encryptionHelper.encrypt(
+            inputStream = inputStream,
+            outputStream = outputStream,
+            password = password,
+            method = EncryptionMethod.STANDARD,
+            progressCallback = { _, _, _ -> },
+            totalSize = originalData.size.toLong(),
+            enableIntegrityCheck = true
+        )
+
+        val decryptedStream = ByteArrayOutputStream()
+        val encryptedInputStream = ByteArrayInputStream(outputStream.toByteArray())
+
+        val result = encryptionHelper.decrypt(
+            inputStream = encryptedInputStream,
+            outputStream = decryptedStream,
+            password = password,
+            progressCallback = { _, _, _ -> },
+            totalSize = outputStream.size().toLong(),
+            verifyIntegrity = true
+        )
+
+        assertThat(result.success).isTrue()
+        assertThat(result.integrityResult?.isValid).isTrue()
+        assertThat(decryptedStream.toByteArray()).isEqualTo(originalData)
+    }
+
+    @Test
+    fun testStreamingDecryption_WithKeyfile_LargeFile_Success() = runTest {
+        // Test streaming decryption with keyfile and large data
+        val originalData = ByteArray(8 * 1024 * 1024) { (it % 256).toByte() }
+        val password = "keyfileLargeTest".toCharArray()
+        val keyfileBytes = encryptionHelper.generateKeyfile(256)
+        val outputStream = ByteArrayOutputStream()
+        val inputStream = ByteArrayInputStream(originalData)
+
+        encryptionHelper.encrypt(
+            inputStream = inputStream,
+            outputStream = outputStream,
+            password = password,
+            method = EncryptionMethod.STANDARD,
+            progressCallback = { _, _, _ -> },
+            totalSize = originalData.size.toLong(),
+            keyfileBytes = keyfileBytes,
+            enableIntegrityCheck = true
+        )
+
+        val decryptedStream = ByteArrayOutputStream()
+        val encryptedInputStream = ByteArrayInputStream(outputStream.toByteArray())
+
+        val result = encryptionHelper.decrypt(
+            inputStream = encryptedInputStream,
+            outputStream = decryptedStream,
+            password = password,
+            progressCallback = { _, _, _ -> },
+            totalSize = outputStream.size().toLong(),
+            keyfileBytes = keyfileBytes,
+            verifyIntegrity = true
+        )
+
+        assertThat(result.success).isTrue()
+        assertThat(result.integrityResult?.isValid).isTrue()
+        assertThat(decryptedStream.toByteArray()).isEqualTo(originalData)
+    }
+
+    @Test
+    fun testStreamingDecryption_CorruptedChunk_ThrowsException() = runTest {
+        // Test that corruption in any chunk is detected
+        val originalData = ByteArray(2 * 1024 * 1024) { (it % 256).toByte() }
+        val password = "corruptionTest".toCharArray()
+        val outputStream = ByteArrayOutputStream()
+        val inputStream = ByteArrayInputStream(originalData)
+
+        encryptionHelper.encrypt(
+            inputStream = inputStream,
+            outputStream = outputStream,
+            password = password,
+            method = EncryptionMethod.STANDARD,
+            progressCallback = { _, _, _ -> },
+            totalSize = originalData.size.toLong(),
+            enableIntegrityCheck = false
+        )
+
+        // Corrupt some bytes in the middle of encrypted data
+        val corruptedData = outputStream.toByteArray().apply {
+            val midPoint = size / 2
+            this[midPoint] = (this[midPoint].toInt() xor 0xFF).toByte()
+        }
+
+        val decryptedStream = ByteArrayOutputStream()
+        val encryptedInputStream = ByteArrayInputStream(corruptedData)
+
+        // Should throw exception when decrypting corrupted chunk
+        assertThrows<javax.crypto.AEADBadTagException> {
+            encryptionHelper.decrypt(
+                inputStream = encryptedInputStream,
+                outputStream = decryptedStream,
+                password = password,
+                progressCallback = { _, _, _ -> },
+                totalSize = corruptedData.size.toLong(),
+                verifyIntegrity = false
+            )
+        }
+    }
+
+    @Test
+    fun testStreamingDecryption_WrongPassword_ThrowsException_LargeFile() = runTest {
+        // Test wrong password detection with large file
+        val originalData = ByteArray(5 * 1024 * 1024) { (it % 256).toByte() }
+        val correctPassword = "correctPassword123".toCharArray()
+        val wrongPassword = "wrongPassword456".toCharArray()
+        val outputStream = ByteArrayOutputStream()
+        val inputStream = ByteArrayInputStream(originalData)
+
+        encryptionHelper.encrypt(
+            inputStream = inputStream,
+            outputStream = outputStream,
+            password = correctPassword,
+            method = EncryptionMethod.STANDARD,
+            progressCallback = { _, _, _ -> },
+            totalSize = originalData.size.toLong()
+        )
+
+        val decryptedStream = ByteArrayOutputStream()
+        val encryptedInputStream = ByteArrayInputStream(outputStream.toByteArray())
+
+        assertThrows<javax.crypto.AEADBadTagException> {
+            encryptionHelper.decrypt(
+                inputStream = encryptedInputStream,
+                outputStream = decryptedStream,
+                password = wrongPassword,
+                progressCallback = { _, _, _ -> },
+                totalSize = outputStream.size().toLong()
+            )
+        }
+    }
+
+    @Test
+    fun testStreamingDecryption_DifferentEncryptionMethods_Success() = runTest {
+        // Test streaming decryption with all encryption methods
+        val originalData = ByteArray(4 * 1024 * 1024) { (it % 256).toByte() }
+
+        EncryptionMethod.entries.forEach { method ->
+            val password = "${method.name}MethodTest".toCharArray()
+            val outputStream = ByteArrayOutputStream()
+            val inputStream = ByteArrayInputStream(originalData)
+
+            // Encrypt with this method
+            encryptionHelper.encrypt(
+                inputStream = inputStream,
+                outputStream = outputStream,
+                password = password,
+                method = method,
+                progressCallback = { _, _, _ -> },
+                totalSize = originalData.size.toLong(),
+                enableIntegrityCheck = true
+            )
+
+            // Decrypt with same method
+            val decryptedStream = ByteArrayOutputStream()
+            val encryptedInputStream = ByteArrayInputStream(outputStream.toByteArray())
+
+            val result = encryptionHelper.decrypt(
+                inputStream = encryptedInputStream,
+                outputStream = decryptedStream,
+                password = password,
+                method = method,
+                progressCallback = { _, _, _ -> },
+                totalSize = outputStream.size().toLong(),
+                verifyIntegrity = true
+            )
+
+            assertThat(result.success).isTrue()
+            assertThat(result.integrityResult?.isValid).isTrue()
+            assertThat(decryptedStream.toByteArray()).isEqualTo(originalData)
+
+            // Clean up for next iteration
+            outputStream.reset()
+        }
+    }
+
+    // endregion
 
     @Test
     fun testKeyDerivation_ConsistentOutput() = runTest {

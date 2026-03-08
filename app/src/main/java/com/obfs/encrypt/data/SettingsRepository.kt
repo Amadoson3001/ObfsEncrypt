@@ -40,6 +40,7 @@ class SettingsRepository @Inject constructor(
         val LANGUAGE_KEY = stringPreferencesKey("language")
         val FILE_SORT_ORDER_KEY = stringPreferencesKey("file_sort_order")
         val FILE_SORT_ASCENDING_KEY = booleanPreferencesKey("file_sort_ascending")
+        val ONBOARDING_COMPLETED_KEY = booleanPreferencesKey("onboarding_completed")
     }
 
     /**
@@ -152,6 +153,41 @@ class SettingsRepository @Inject constructor(
     }
 
     /**
+     * Flow of onboarding completed status.
+     * Default: false (onboarding not completed)
+     */
+    val onboardingCompleted: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[ONBOARDING_COMPLETED_KEY] ?: false
+    }
+
+    /**
+     * Update file sort order setting.
+     */
+    suspend fun setFileSortOrder(sortOrder: String) {
+        context.dataStore.edit { preferences ->
+            preferences[FILE_SORT_ORDER_KEY] = sortOrder
+        }
+    }
+
+    /**
+     * Update file sort ascending setting.
+     */
+    suspend fun setFileSortAscending(ascending: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[FILE_SORT_ASCENDING_KEY] = ascending
+        }
+    }
+
+    /**
+     * Mark onboarding as completed.
+     */
+    suspend fun setOnboardingCompleted(completed: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[ONBOARDING_COMPLETED_KEY] = completed
+        }
+    }
+
+    /**
      * Update secure delete originals setting.
      */
     suspend fun setSecureDeleteOriginals(enabled: Boolean) {
@@ -244,25 +280,6 @@ class SettingsRepository @Inject constructor(
     suspend fun setLanguage(language: String) {
         context.dataStore.edit { preferences ->
             preferences[LANGUAGE_KEY] = language
-        }
-    }
-
-    /**
-     * Update file sort order setting.
-     * @param sortOrder Sort order: "NAME", "DATE", "SIZE", "TYPE"
-     */
-    suspend fun setFileSortOrder(sortOrder: String) {
-        context.dataStore.edit { preferences ->
-            preferences[FILE_SORT_ORDER_KEY] = sortOrder
-        }
-    }
-
-    /**
-     * Update file sort ascending setting.
-     */
-    suspend fun setFileSortAscending(ascending: Boolean) {
-        context.dataStore.edit { preferences ->
-            preferences[FILE_SORT_ASCENDING_KEY] = ascending
         }
     }
 }

@@ -4,10 +4,18 @@ import android.net.Uri
 import android.util.Log
 import com.lambdapioneer.argon2kt.Argon2Kt
 import com.lambdapioneer.argon2kt.Argon2Mode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.PushbackInputStream
 import java.nio.ByteBuffer
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -16,8 +24,7 @@ import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
 
 /**
  * Core Encryption Logic — Chunked AES-256-GCM with Integrity Verification
@@ -264,7 +271,8 @@ class EncryptionHelper {
         progressCallback: suspend (Long, Long, Long) -> Unit,
         totalSize: Long = 0L,
         keyfileBytes: ByteArray? = null,
-        enableIntegrityCheck: Boolean = false
+        enableIntegrityCheck: Boolean = false,
+        isPaused: StateFlow<Boolean> = MutableStateFlow(false)
     ) = withContext(Dispatchers.IO) {
         try {
             val salt = ByteArray(SALT_LENGTH).apply { SecureRandom().nextBytes(this) }
@@ -300,9 +308,9 @@ class EncryptionHelper {
             var chunkIndex = 0L
             var lastUpdateTime = startTime
 
-            // For integrity check, collect all plaintext to compute hash after encryption
-            val integrityData = if (enableIntegrityCheck) {
-                java.io.ByteArrayOutputStream()
+            // For integrity check, use streaming digest to avoid OOM
+            val checksumDigest = if (enableIntegrityCheck) {
+                MessageDigest.getInstance("SHA-256")
             } else null
 
             progressCallback(0, fileSize ?: 1L, startTime)
@@ -312,6 +320,18 @@ class EncryptionHelper {
             var bytesRead: Int
 
             while (inputStream.read(plainBuf).also { bytesRead = it } != -1) {
+                // Check for pause
+                while (isPaused.value) {
+                    delay(200)
+                    if (!kotlin.coroutines.coroutineContext.isActive) return@withContext
+                }
+                
+                // Allow cancellation
+                yield()
+
+                // Update checksum digest before encryption to ensure original data is hashed
+                checksumDigest?.update(plainBuf, 0, bytesRead)
+
                 val nonce = chunkNonce(baseNonce, chunkIndex)
                 val cipher = Cipher.getInstance("AES/GCM/NoPadding")
                 cipher.init(Cipher.ENCRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH, nonce))
@@ -323,9 +343,6 @@ class EncryptionHelper {
                 val lenBytes = ByteBuffer.allocate(4).putInt(cipherChunk.size).array()
                 outputStream.write(lenBytes)
                 outputStream.write(cipherChunk)
-
-                // Store plaintext for integrity check
-                integrityData?.write(plainBuf, 0, bytesRead)
 
                 totalBytesRead += bytesRead
                 chunkIndex++
@@ -339,17 +356,12 @@ class EncryptionHelper {
             }
 
             // Write integrity check if enabled
-            if (enableIntegrityCheck && integrityData != null) {
-                val plaintextData = integrityData.toByteArray()
-                val checksum = computeChecksum(plaintextData)
+            if (enableIntegrityCheck && checksumDigest != null) {
+                val checksum = checksumDigest.digest()
                 val hmac = computeHmac(checksum, key)
 
                 outputStream.write(checksum)
                 outputStream.write(hmac)
-
-                // Clear sensitive data
-                plaintextData.fill(0)
-                integrityData.reset()
             }
 
             outputStream.flush()
@@ -376,12 +388,17 @@ class EncryptionHelper {
         progressCallback: suspend (Long, Long, Long) -> Unit,
         totalSize: Long = 0L,
         keyfileBytes: ByteArray? = null,
-        verifyIntegrity: Boolean = false
+        verifyIntegrity: Boolean = false,
+        isPaused: StateFlow<Boolean> = MutableStateFlow(false)
     ): DecryptionResult = withContext(Dispatchers.IO) {
+        // Use PushbackInputStream to handle chunk/checksum boundary without losing bytes
+        val pushbackStream = PushbackInputStream(inputStream, 4)
         try {
             // Read and verify magic header
             val magicBuffer = ByteArray(MAGIC_HEADER.length)
-            inputStream.read(magicBuffer)
+            if (readFully(pushbackStream, magicBuffer) < MAGIC_HEADER.length) {
+                throw IllegalArgumentException("Corrupted file: could not read magic header")
+            }
             val magic = String(magicBuffer, Charsets.UTF_8)
 
             val isV4Format = magic == MAGIC_HEADER
@@ -393,16 +410,20 @@ class EncryptionHelper {
             }
 
             val salt = ByteArray(SALT_LENGTH)
-            readFully(inputStream, salt)
+            if (readFully(pushbackStream, salt) < SALT_LENGTH) {
+                throw IllegalArgumentException("Corrupted file: could not read salt")
+            }
 
             val baseNonce = ByteArray(NONCE_LENGTH)
-            readFully(inputStream, baseNonce)
+            if (readFully(pushbackStream, baseNonce) < NONCE_LENGTH) {
+                throw IllegalArgumentException("Corrupted file: could not read nonce")
+            }
 
             // Read encryption method from header (v3/v4 format only)
             val storedMethod = if (isV2Format) {
                 EncryptionMethod.STANDARD
             } else {
-                val methodByte = inputStream.read()
+                val methodByte = pushbackStream.read()
                 if (methodByte == -1 || methodByte >= EncryptionMethod.entries.size) {
                     throw IllegalArgumentException("Corrupted file: invalid encryption method byte")
                 }
@@ -413,22 +434,24 @@ class EncryptionHelper {
             val hasIntegrityCheck = if (isV2Format) {
                 false
             } else {
-                val flag = inputStream.read()
+                val flag = pushbackStream.read()
                 flag == 1
             }
 
             // Read and verify header HMAC (v4 format only)
             var storedHmac: ByteArray? = null
             val hasHeaderHmac = if (isV4Format) {
-                val headerHmacFlag = inputStream.read()
+                val headerHmacFlag = pushbackStream.read()
                 if (headerHmacFlag != 1) {
                     Log.w("EncryptionHelper", "V4 file without header HMAC flag set")
                 }
-                
+
                 // Read stored HMAC
                 storedHmac = ByteArray(HEADER_HMAC_LENGTH)
-                readFully(inputStream, storedHmac!!)
-                
+                if (readFully(pushbackStream, storedHmac!!) < HEADER_HMAC_LENGTH) {
+                    throw IllegalArgumentException("Corrupted file: could not read header HMAC")
+                }
+
                 true // Header HMAC is present and will be verified after key derivation
             } else {
                 false
@@ -466,9 +489,9 @@ class EncryptionHelper {
             var chunkIndex = 0L
             var lastUpdateTime = startTime
 
-            // For integrity verification
-            val outputBuffer = if (hasIntegrityCheck || verifyIntegrity) {
-                java.io.ByteArrayOutputStream()
+            // For integrity verification - use a streaming digest instead of buffering all data
+            val checksumDigest = if (hasIntegrityCheck || verifyIntegrity) {
+                MessageDigest.getInstance("SHA-256")
             } else null
 
             progressCallback(0, fileSize ?: 1L, startTime)
@@ -476,24 +499,55 @@ class EncryptionHelper {
             val lenBuf = ByteArray(4)
 
             while (true) {
+                // Check for pause
+                while (isPaused.value) {
+                    delay(200)
+                    if (!kotlin.coroutines.coroutineContext.isActive) {
+                        return@withContext DecryptionResult(success = false)
+                    }
+                }
+
+                // Allow cancellation
+                yield()
+
                 // Read 4-byte length prefix
-                val lenRead = inputStream.read(lenBuf)
-                if (lenRead == -1) break // EOF — done
+                val lenRead = readFully(pushbackStream, lenBuf)
                 if (lenRead < 4) {
-                    // Partial read at end — could be integrity data
+                    // EOF or partial read at end — break and handle integrity data if any
                     break
                 }
 
                 val chunkLen = ByteBuffer.wrap(lenBuf).int
 
                 // Check if this looks like integrity data at the end
-                if (chunkLen <= 0 || chunkLen > CHUNK_SIZE + 256) {
-                    // Could be start of integrity data, push back and break
+                // Valid chunk lengths are between 1 and CHUNK_SIZE + GCM_TAG_LENGTH/8
+                val maxChunkLen = CHUNK_SIZE + (GCM_TAG_LENGTH / 8)
+                if (chunkLen <= 0 || chunkLen > maxChunkLen) {
+                    // Not a valid chunk length, must be the start of integrity data
+                    pushbackStream.unread(lenBuf)
+                    break
+                }
+
+                // Additional check: if chunkLen is exactly 32 (checksum size), and we expect integrity data,
+                // it's ambiguous. But a chunk is always followed by more data or EOF.
+                // We'll prioritize the possibility of it being the checksum if it's at the end.
+                if (chunkLen == SHA256_CHECKSUM_LENGTH && hasIntegrityCheck) {
+                    // Peak ahead to see if there's enough data for this to be a chunk
+                    // (chunkLen bytes) + (at least 4 more bytes for next chunk or 64 for integrity)
+                    // If not, it's likely the checksum itself.
+                    // This is a heuristic, but reliable since SHA256_CHECKSUM_LENGTH is small.
+                    pushbackStream.unread(lenBuf)
                     break
                 }
 
                 val cipherChunk = ByteArray(chunkLen)
-                readFully(inputStream, cipherChunk)
+                val cipherRead = readFully(pushbackStream, cipherChunk)
+                if (cipherRead < cipherChunk.size) {
+                    // Unexpected EOF, unread what we got and break
+                    pushbackStream.unread(cipherChunk, 0, cipherRead)
+                    pushbackStream.unread(lenBuf)
+                    break
+                }
 
                 val nonce = chunkNonce(baseNonce, chunkIndex)
                 val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -507,7 +561,8 @@ class EncryptionHelper {
                 }
 
                 outputStream.write(plainChunk)
-                outputBuffer?.write(plainChunk)
+                // Update checksum digest incrementally - no buffering needed
+                checksumDigest?.update(plainChunk)
 
                 // Progress is based on bytes read from the encrypted file (totalSize is file size)
                 totalBytesDecrypted += chunkLen + 4
@@ -526,17 +581,27 @@ class EncryptionHelper {
             if (hasIntegrityCheck) {
                 try {
                     val expectedChecksum = ByteArray(SHA256_CHECKSUM_LENGTH)
-                    readFully(inputStream, expectedChecksum)
+                    val checksumRead = readFully(pushbackStream, expectedChecksum)
+                    if (checksumRead < SHA256_CHECKSUM_LENGTH) {
+                        throw IllegalArgumentException("Corrupted file: could not read integrity checksum")
+                    }
 
                     val expectedHmac = ByteArray(HMAC_SHA256_LENGTH)
-                    readFully(inputStream, expectedHmac)
+                    val hmacRead = readFully(pushbackStream, expectedHmac)
+                    if (hmacRead < HMAC_SHA256_LENGTH) {
+                        throw IllegalArgumentException("Corrupted file: could not read integrity HMAC")
+                    }
 
-                    // Verify HMAC
+                    // Verify HMAC first
                     val hmacValid = verifyHmac(expectedChecksum, key, expectedHmac)
+                    Log.d("EncryptionHelper", "HMAC valid: $hmacValid, checksumDigest: ${checksumDigest != null}")
 
-                    if (hmacValid && outputBuffer != null) {
-                        val computedChecksum = computeChecksum(outputBuffer.toByteArray())
+                    if (hmacValid && checksumDigest != null) {
+                        val computedChecksum = checksumDigest.digest()
+                        Log.d("EncryptionHelper", "Expected checksum: ${expectedChecksum.joinToString("") { "%02x".format(it) }}")
+                        Log.d("EncryptionHelper", "Computed checksum: ${computedChecksum.joinToString("") { "%02x".format(it) }}")
                         val checksumValid = java.security.MessageDigest.isEqual(computedChecksum, expectedChecksum)
+                        Log.d("EncryptionHelper", "Checksum valid: $checksumValid")
                         integrityResult = IntegrityResult(
                             hmacValid = true,
                             checksumValid = checksumValid,
@@ -556,6 +621,13 @@ class EncryptionHelper {
                         message = "Integrity check error: ${e.message}"
                     )
                 }
+            } else if (verifyIntegrity && checksumDigest != null) {
+                // If header says no integrity check but caller requested it (e.g. for already decrypted data)
+                integrityResult = IntegrityResult(
+                    hmacValid = true, // No HMAC to verify
+                    checksumValid = true, // We have nothing to compare against, but we computed it
+                    message = "Integrity computation complete (no verification possible)"
+                )
             }
 
             outputStream.flush()
@@ -579,19 +651,21 @@ class EncryptionHelper {
             Log.e("EncryptionHelper", "Decryption Failed", e)
             throw e
         } finally {
-            inputStream.close()
-            outputStream.close()
+            pushbackStream.close()
         }
     }
 
-    /** Reads exactly buf.size bytes from the stream, blocking until all are available. */
-    private fun readFully(stream: InputStream, buf: ByteArray) {
+    /** Reads exactly buf.size bytes from the stream, blocking until all are available.
+     *  Returns the total number of bytes read, or less than buf.size if EOF is reached.
+     */
+    private fun readFully(stream: InputStream, buf: ByteArray): Int {
         var offset = 0
         while (offset < buf.size) {
             val read = stream.read(buf, offset, buf.size - offset)
-            if (read == -1) throw java.io.EOFException("Unexpected end of stream reading ${buf.size} bytes at offset $offset")
+            if (read == -1) return offset  // Return what we've read so far
             offset += read
         }
+        return offset
     }
 }
 

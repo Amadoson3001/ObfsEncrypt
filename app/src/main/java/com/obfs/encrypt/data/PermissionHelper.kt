@@ -100,7 +100,38 @@ object PermissionHelper {
     }
 
     /**
+     * Check if the app has notification permission.
+     * Required for Android 13+ (API 33+) to show notifications.
+     */
+    fun hasNotificationPermission(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            // Android 12 and below: Notifications are granted by default
+            true
+        }
+    }
+
+    /**
+     * Request notification permission.
+     * Required for Android 13+ (API 33+) to show progress in notifications.
+     */
+    fun requestNotificationPermission(activity: Activity) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ActivityCompat.requestPermissions(
+                activity,
+                arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                REQUEST_NOTIFICATION_PERMISSION_CODE
+            )
+        }
+    }
+
+    /**
      * Permission request code for runtime permissions.
      */
     const val REQUEST_STORAGE_PERMISSION_CODE = 100
+    const val REQUEST_NOTIFICATION_PERMISSION_CODE = 101
 }

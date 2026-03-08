@@ -78,8 +78,11 @@ private class PullToRefreshNestedScroll(
     private val isRefreshing: () -> Boolean,
     private val onRefresh: () -> Unit,
     private val dragOffset: androidx.compose.runtime.MutableState<Float>,
-    private val isTriggered: androidx.compose.runtime.MutableState<Boolean>
+    private val isTriggered: androidx.compose.runtime.MutableState<Boolean>,
+    private val coroutineScope: kotlinx.coroutines.CoroutineScope
 ) : NestedScrollConnection {
+
+    private var resetJob: kotlinx.coroutines.Job? = null
 
     // Rubberband factor — drag feels progressively harder the further you pull
     private fun rubberbandFactor(offset: Float): Float {
@@ -88,6 +91,11 @@ private class PullToRefreshNestedScroll(
     }
 
     override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+        // Cancel any ongoing reset animation when user starts scrolling
+        if (source == NestedScrollSource.UserInput && available.y != 0f) {
+            resetJob?.cancel()
+        }
+        
         // Consume upward scroll to collapse the indicator
         if (source == NestedScrollSource.UserInput && dragOffset.value > 0f && available.y < 0f) {
             val consumed = available.y.coerceAtLeast(-dragOffset.value)
@@ -115,107 +123,123 @@ private class PullToRefreshNestedScroll(
         if (isTriggered.value && !isRefreshing()) {
             onRefresh()
         }
+        
+        // Always animate back to zero when user releases finger
+        resetJob = coroutineScope.launch {
+            if (dragOffset.value > 0f) {
+                animate(
+                    initialValue = dragOffset.value,
+                    targetValue = 0f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessMediumLow
+                    )
+                ) { value, _ ->
+                    dragOffset.value = value
+                }
+                isTriggered.value = false
+            }
+        }
+        
         return Velocity.Zero
     }
 }
 
 /**
- * Premium animated refresh indicator pill.
- * Shows progress arc, check/spinner icon, and frosted-glass background.
+ * Browser-style animated refresh indicator.
+ * Shows circular progress with rotating arrow that transforms into a spinner during refresh.
  */
 @Composable
-private fun RefreshIndicatorPill(
+private fun BrowserRefreshIndicator(
     dragOffset: Float,
     isTriggered: Boolean,
     isRefreshing: Boolean
 ) {
     val density = LocalDensity.current
     val triggerFraction = (dragOffset / REFRESH_TRIGGER_PX).coerceIn(0f, 1f)
-    val overFraction = (dragOffset / MAX_DRAG_PX).coerceIn(0f, 1f)
-
-    // Pill visibility driven by drag
-    val pillAlpha by animateFloatAsState(
-        targetValue = triggerFraction.coerceIn(0f, 1f),
-        animationSpec = spring(stiffness = Spring.StiffnessHigh),
-        label = "pillAlpha"
+    
+    // Show indicator when refreshing OR when there's drag progress
+    val showIndicator = isRefreshing || dragOffset > 10f
+    
+    // Visibility based on drag OR refresh state
+    val indicatorAlpha by animateFloatAsState(
+        targetValue = if (showIndicator) 1f else 0f,
+        animationSpec = tween(150),
+        label = "indicatorAlpha"
     )
-
-    // Translate pill downward as you drag
-    val pillOffsetY by animateFloatAsState(
-        targetValue = if (isRefreshing) 56f else (dragOffset * 0.38f).coerceAtMost(56f),
-        animationSpec = if (isRefreshing)
-            spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow)
-        else
-            spring(stiffness = Spring.StiffnessHigh),
-        label = "pillOffsetY"
+    
+    // Vertical offset - indicator follows drag or stays at position when refreshing
+    val indicatorOffsetY by animateFloatAsState(
+        targetValue = if (isRefreshing) {
+            44f
+        } else {
+            (dragOffset * 0.4f).coerceAtMost(44f)
+        },
+        animationSpec = tween(100),
+        label = "indicatorOffsetY"
     )
-
-    // Icon rotation: cw spin while refreshing
-    val infiniteTransition = rememberInfiniteTransition(label = "spin")
+    
+    // Infinite spin during refresh
+    val infiniteTransition = rememberInfiniteTransition(label = "refreshSpin")
     val spinAngle by infiniteTransition.animateFloat(
-        initialValue = 0f, targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(800, easing = LinearEasing)),
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
         label = "spinAngle"
     )
-
-    // Static rotation progress while pulling
-    val pullAngle = triggerFraction * 280f
-
-    // Scale bounce when triggered
-    val pillScale by animateFloatAsState(
-        targetValue = if (isTriggered || isRefreshing) 1.1f else 1f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
-        label = "pillScale"
-    )
-
+    
+    // Arrow rotation as user pulls (0° to 180°)
+    val arrowRotation = triggerFraction * 180f
+    
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .offset(y = with(density) { pillOffsetY.toDp() - 20.dp }),
+            .offset(y = with(density) { indicatorOffsetY.toDp() - 12.dp }),
         contentAlignment = Alignment.TopCenter
     ) {
         Box(
             modifier = Modifier
-                .alpha(pillAlpha)
-                .scale(pillScale)
-                .clip(RoundedCornerShape(50))
-                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .alpha(indicatorAlpha)
+                .size(36.dp),
             contentAlignment = Alignment.Center
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(24.dp)
-                        .rotate(if (isRefreshing) spinAngle else pullAngle),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = if (isTriggered || isRefreshing) Icons.Default.Refresh else Icons.Default.ArrowDownward,
-                        contentDescription = null,
-                        tint = if (isTriggered || isRefreshing)
-                            MaterialTheme.colorScheme.primary
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                AnimatedVisibility(
-                    visible = isTriggered || isRefreshing,
-                    enter = fadeIn(spring(stiffness = Spring.StiffnessHigh)),
-                    exit = fadeOut(spring(stiffness = Spring.StiffnessHigh))
-                ) {
-                    Text(
-                        text = if (isRefreshing) "Refreshing…" else "Release to refresh",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
+            // Circular progress background ring
+            if (isRefreshing) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(32.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    strokeWidth = 2.5.dp
+                )
+            } else {
+                // Static ring when pulling
+                CircularProgressIndicator(
+                    modifier = Modifier.size(32.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                    strokeWidth = 2.dp,
+                    progress = { triggerFraction * 0.75f }
+                )
             }
+            
+            // Arrow / refresh icon in center
+            Icon(
+                imageVector = if (isRefreshing) {
+                    Icons.Default.Refresh
+                } else {
+                    Icons.Default.ArrowDownward
+                },
+                contentDescription = null,
+                modifier = Modifier
+                    .size(18.dp)
+                    .rotate(if (isRefreshing) spinAngle else arrowRotation),
+                tint = if (isTriggered || isRefreshing) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
         }
     }
 }
@@ -299,27 +323,40 @@ fun OptimizedFileList(
         }
     }
 
-    // Snap back to zero when refresh completes
+    // Animate indicator in when refresh starts (auto-pop like browser)
+    LaunchedEffect(isLoading) {
+        if (isLoading && dragOffset.value < 50f) {
+            dragOffset.value = 60f
+            isTriggered.value = true
+        }
+    }
+
+    // Snap back to zero when refresh completes (auto-disappear like browser)
     LaunchedEffect(isLoading) {
         if (!isLoading && dragOffset.value > 0f) {
-            // Small delay so user sees the "completed" state briefly
-            delay(300)
-            val anim = Animatable(dragOffset.value)
-            anim.animateTo(
+            delay(150)
+            // Animate smoothly back to zero
+            animate(
+                initialValue = dragOffset.value,
                 targetValue = 0f,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow)
-            )
-            dragOffset.value = 0f
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                )
+            ) { value, _ ->
+                dragOffset.value = value
+            }
             isTriggered.value = false
         }
     }
 
-    val nestedScroll = remember(isLoading) {
+    val nestedScroll = remember(isLoading, coroutineScope) {
         PullToRefreshNestedScroll(
             isRefreshing = { isLoading },
             onRefresh = onRefresh,
             dragOffset = dragOffset,
-            isTriggered = isTriggered
+            isTriggered = isTriggered,
+            coroutineScope = coroutineScope
         )
     }
 
@@ -372,8 +409,8 @@ fun OptimizedFileList(
             }
         }
 
-        // Overlay refresh indicator pill — always on top
-        RefreshIndicatorPill(
+        // Overlay refresh indicator — browser style
+        BrowserRefreshIndicator(
             dragOffset = dragOffset.value,
             isTriggered = isTriggered.value,
             isRefreshing = isLoading

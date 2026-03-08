@@ -1,8 +1,9 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.parcelize)
     alias(libs.plugins.ksp)
-    id("com.google.dagger.hilt.android") version "2.59.2"
+    alias(libs.plugins.hilt.android)
 }
 
 android {

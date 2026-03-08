@@ -9,12 +9,16 @@ import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
+import androidx.work.WorkManager
 import com.obfs.encrypt.R
 import com.obfs.encrypt.crypto.EncryptionHelper
 import com.obfs.encrypt.crypto.EncryptionMethod
 import com.obfs.encrypt.data.EncryptionHistoryItem
 import com.obfs.encrypt.data.EncryptionHistoryRepository
+import com.obfs.encrypt.data.FileEncryptionManager
 import com.obfs.encrypt.data.createHistoryItem
+import com.obfs.encrypt.security.EncryptedData
+import com.obfs.encrypt.security.SecureKeyStore
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.io.File
@@ -34,7 +38,7 @@ import kotlinx.coroutines.withContext
  *     .setInputData(workDataOf(
  *         "operation" to "encrypt",
  *         "file_uris" to urisJson,
- *         "password" to password,
+ *         "password_file" to passwordFilePath,
  *         "method" to method.name,
  *         "delete_original" to deleteOriginal
  *     ))
@@ -47,7 +51,9 @@ class EncryptionWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted workerParams: WorkerParameters,
     private val encryptionHelper: EncryptionHelper,
-    private val historyRepository: EncryptionHistoryRepository
+    private val historyRepository: EncryptionHistoryRepository,
+    private val secureKeyStore: SecureKeyStore,
+    private val fileEncryptionManager: FileEncryptionManager
 ) : CoroutineWorker(context, workerParams) {
 
     companion object {
@@ -56,16 +62,22 @@ class EncryptionWorker @AssistedInject constructor(
         
         const val KEY_OPERATION = "operation"
         const val KEY_FILE_URIS = "file_uris"
-        const val KEY_PASSWORD = "password"
+        const val KEY_PASSWORD_FILE = "password_file" // Secure file path
+        const val KEY_PASSWORD = "password" // DEPRECATED for security
         const val KEY_METHOD = "method"
         const val KEY_DELETE_ORIGINAL = "delete_original"
         const val KEY_ENABLE_INTEGRITY = "enable_integrity"
+        const val KEY_PROGRESS = "progress"
+        const val KEY_CURRENT_FILE = "current_file"
+        const val KEY_CURRENT_FILE_INDEX = "current_file_index"
+        const val KEY_TOTAL_FILES = "total_files"
         
         const val OPERATION_ENCRYPT = "encrypt"
         const val OPERATION_DECRYPT = "decrypt"
     }
 
     private val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    private val gson = com.google.gson.Gson()
     
     // Progress tracking for live updates
     private val _progress = MutableStateFlow(0f)
@@ -76,12 +88,49 @@ class EncryptionWorker @AssistedInject constructor(
     }
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        var password: CharArray? = null
+        var tempPasswordFile: File? = null
+
         try {
             // Get input data
             val operation = inputData.getString(KEY_OPERATION) ?: return@withContext Result.failure()
             val fileUrisJson = inputData.getString(KEY_FILE_URIS) ?: return@withContext Result.failure()
-            val passwordStr = inputData.getString(KEY_PASSWORD) ?: return@withContext Result.failure()
-            val password = passwordStr.toCharArray()
+            
+            // Securely retrieve password from temporary file
+            val passwordFilePath = inputData.getString(KEY_PASSWORD_FILE)
+            if (passwordFilePath != null) {
+                tempPasswordFile = File(passwordFilePath)
+                if (tempPasswordFile.exists()) {
+                    try {
+                        val encryptedJson = tempPasswordFile.readText()
+                        val encryptedData = gson.fromJson(encryptedJson, EncryptedData::class.java)
+                        
+                        if (!secureKeyStore.isInitialized()) {
+                            secureKeyStore.initialize()
+                        }
+                        
+                        val decryptedPassword = secureKeyStore.decrypt(encryptedData)
+                        password = decryptedPassword?.toCharArray()
+                        
+                        // Delete the file immediately after reading
+                        tempPasswordFile.delete()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        return@withContext Result.failure()
+                    }
+                }
+            }
+            
+            // Fallback to legacy password (if still in use during transition)
+            if (password == null) {
+                val passwordStr = inputData.getString(KEY_PASSWORD)
+                password = passwordStr?.toCharArray()
+            }
+
+            if (password == null) {
+                return@withContext Result.failure()
+            }
+
             val method = try {
                 EncryptionMethod.valueOf(inputData.getString(KEY_METHOD) ?: "STANDARD")
             } catch (e: Exception) {
@@ -113,7 +162,7 @@ class EncryptionWorker @AssistedInject constructor(
                 try {
                     when (operation) {
                         OPERATION_ENCRYPT -> {
-                            processEncryption(uri, password, method, deleteOriginal, enableIntegrity)
+                            processEncryption(uri, password!!, method, deleteOriginal, enableIntegrity, index + 1, uris.size)
                             
                             // Add to history on success
                             historyRepository.addHistoryItem(
@@ -128,7 +177,7 @@ class EncryptionWorker @AssistedInject constructor(
                             )
                         }
                         OPERATION_DECRYPT -> {
-                            processDecryption(uri, password, deleteOriginal, enableIntegrity)
+                            processDecryption(uri, password!!, deleteOriginal, enableIntegrity, index + 1, uris.size)
                             
                             // Add to history on success
                             historyRepository.addHistoryItem(
@@ -142,9 +191,16 @@ class EncryptionWorker @AssistedInject constructor(
                         }
                     }
 
-                    // Update progress
+                    // Update progress (overall file-based progress)
                     val progress = (index + 1).toFloat() / uris.size
                     _progress.value = progress
+                    setProgress(androidx.work.workDataOf(
+                        KEY_PROGRESS to progress,
+                        KEY_CURRENT_FILE to fileName,
+                        KEY_CURRENT_FILE_INDEX to index + 1,
+                        KEY_TOTAL_FILES to uris.size,
+                        KEY_OPERATION to operation
+                    ))
                     setForeground(createForegroundInfo(operation, progress, fileName))
 
                 } catch (e: Exception) {
@@ -177,8 +233,14 @@ class EncryptionWorker @AssistedInject constructor(
 
         } catch (e: Exception) {
             e.printStackTrace()
-            cleanupPassword(inputData.getString(KEY_PASSWORD)?.toCharArray())
+            cleanupPassword(password)
             Result.failure()
+        } finally {
+            // Final cleanup of the password and file
+            cleanupPassword(password)
+            tempPasswordFile?.let {
+                if (it.exists()) it.delete()
+            }
         }
     }
 
@@ -190,13 +252,21 @@ class EncryptionWorker @AssistedInject constructor(
         progress: Float,
         currentFile: String = ""
     ): ForegroundInfo {
+        val title = if (operation == OPERATION_ENCRYPT) "Encrypting files..." else "Decrypting files..."
+        val progressInt = (progress * 100).toInt()
+        
+        // Add a Cancel button to the notification
+        val cancelIntent = WorkManager.getInstance(applicationContext)
+            .createCancelPendingIntent(id)
+
         val notification = NotificationCompat.Builder(applicationContext, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle(if (operation == OPERATION_ENCRYPT) "Encrypting files..." else "Decrypting files...")
+            .setContentTitle(title)
             .setContentText(if (currentFile.isNotEmpty()) currentFile else "Preparing...")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setProgress(100, (progress * 100).toInt(), false)
+            .setProgress(100, progressInt, progress <= 0f)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Cancel", cancelIntent)
             .build()
 
         return ForegroundInfo(NOTIFICATION_ID, notification)
@@ -250,29 +320,29 @@ class EncryptionWorker @AssistedInject constructor(
         password: CharArray,
         method: EncryptionMethod,
         deleteOriginal: Boolean,
-        enableIntegrity: Boolean
+        enableIntegrity: Boolean,
+        index: Int,
+        totalFiles: Int
     ) {
-        val cr = applicationContext.contentResolver
         val sourceFile = androidx.documentfile.provider.DocumentFile.fromSingleUri(applicationContext, uri)
             ?: throw IllegalArgumentException("Could not read source file")
-        val fileSize = sourceFile.length()
+        val fileName = sourceFile.name ?: "Unknown"
 
-        val outputUri = createOutputFile(uri, encrypt = true)
+        val outputUri = fileEncryptionManager.createOutputFile(uri, encrypt = true)
 
-        cr.openInputStream(uri)?.use { inputStream ->
-            cr.openOutputStream(outputUri)?.use { outputStream ->
-                encryptionHelper.encrypt(
-                    inputStream = inputStream,
-                    outputStream = outputStream,
-                    password = password,
-                    method = method,
-                    progressCallback = { current, total, _ -> },
-                    totalSize = fileSize,
-                    keyfileBytes = null,
-                    enableIntegrityCheck = enableIntegrity
-                )
+        fileEncryptionManager.encryptUri(
+            sourceUri = uri,
+            outputUri = outputUri,
+            password = password,
+            method = method,
+            enableIntegrityCheck = enableIntegrity,
+            progressCallback = { current, total, _ ->
+                val fileProgress = current.toFloat() / total.toFloat()
+                val overallProgress = (index + fileProgress) / totalFiles
+                _progress.value = overallProgress
+                setForeground(createForegroundInfo(OPERATION_ENCRYPT, overallProgress, "($index/$totalFiles) $fileName"))
             }
-        }
+        )
 
         if (deleteOriginal) {
             com.obfs.encrypt.data.SecureDelete.secureDelete(applicationContext, sourceFile)
@@ -286,67 +356,32 @@ class EncryptionWorker @AssistedInject constructor(
         uri: Uri,
         password: CharArray,
         deleteOriginal: Boolean,
-        verifyIntegrity: Boolean
+        verifyIntegrity: Boolean,
+        index: Int,
+        totalFiles: Int
     ) {
-        val cr = applicationContext.contentResolver
         val sourceFile = androidx.documentfile.provider.DocumentFile.fromSingleUri(applicationContext, uri)
             ?: throw IllegalArgumentException("Cannot read source file")
-        val fileSize = sourceFile.length()
+        val fileName = sourceFile.name ?: "Unknown"
 
-        val outputUri = createOutputFile(uri, encrypt = false)
+        val outputUri = fileEncryptionManager.createOutputFile(uri, encrypt = false)
 
-        cr.openInputStream(uri)?.use { inputStream ->
-            cr.openOutputStream(outputUri)?.use { outputStream ->
-                encryptionHelper.decrypt(
-                    inputStream = inputStream,
-                    outputStream = outputStream,
-                    password = password,
-                    method = EncryptionMethod.STANDARD,
-                    progressCallback = { current, total, _ -> },
-                    totalSize = fileSize,
-                    keyfileBytes = null,
-                    verifyIntegrity = verifyIntegrity
-                )
+        fileEncryptionManager.decryptUri(
+            sourceUri = uri,
+            outputUri = outputUri,
+            password = password,
+            verifyIntegrity = verifyIntegrity,
+            progressCallback = { current, total, _ ->
+                val fileProgress = current.toFloat() / total.toFloat()
+                val overallProgress = (index + fileProgress) / totalFiles
+                _progress.value = overallProgress
+                setForeground(createForegroundInfo(OPERATION_DECRYPT, overallProgress, "($index/$totalFiles) $fileName"))
             }
-        }
+        )
 
         if (deleteOriginal) {
             com.obfs.encrypt.data.SecureDelete.secureDelete(applicationContext, sourceFile)
         }
-    }
-
-    /**
-     * Create output file for encryption/decryption result.
-     * Ensures no conflicts by using unique filenames.
-     */
-    private fun createOutputFile(inputUri: Uri, encrypt: Boolean): Uri {
-        val cr = applicationContext.contentResolver
-        val sourceFile = androidx.documentfile.provider.DocumentFile.fromSingleUri(applicationContext, inputUri)
-            ?: throw IllegalArgumentException("Could not access source file")
-        
-        val parent = sourceFile.parentFile ?: throw IllegalStateException("No parent folder")
-        
-        val outputName = if (encrypt) {
-            "${sourceFile.name}.obfs"
-        } else {
-            sourceFile.name?.removeSuffix(".obfs") ?: "decrypted_${System.currentTimeMillis()}"
-        }
-
-        // Handle conflict resolution
-        var finalName = outputName
-        var counter = 1
-        while (parent.findFile(finalName) != null) {
-            val base = if (outputName.contains(".")) outputName.substringBeforeLast(".") else outputName
-            val ext = if (outputName.contains(".")) ".${outputName.substringAfterLast(".")}" else ""
-            finalName = "$base ($counter)$ext"
-            counter++
-        }
-
-        val mimeType = if (encrypt) "application/octet-stream" else "*/*"
-        val newFile = parent.createFile(mimeType, finalName) 
-            ?: throw IllegalStateException("Failed to create output file")
-            
-        return newFile.uri
     }
 
     /**

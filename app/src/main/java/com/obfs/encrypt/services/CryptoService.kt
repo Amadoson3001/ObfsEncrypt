@@ -38,7 +38,18 @@ class CryptoService : Service() {
     companion object {
         const val CHANNEL_ID = "crypto_service_channel"
         const val NOTIFICATION_ID = 1001
+        
         const val ACTION_CANCEL = "com.obfs.encrypt.ACTION_CANCEL"
+        const val ACTION_PAUSE = "com.obfs.encrypt.ACTION_PAUSE"
+        const val ACTION_RESUME = "com.obfs.encrypt.ACTION_RESUME"
+        const val ACTION_UPDATE_PROGRESS = "com.obfs.encrypt.ACTION_UPDATE_PROGRESS"
+        
+        const val ACTION_BROADCAST_CANCEL = "com.obfs.encrypt.BROADCAST_CANCEL"
+        const val ACTION_BROADCAST_PAUSE = "com.obfs.encrypt.BROADCAST_PAUSE"
+        
+        const val EXTRA_PROGRESS = "extra_progress"
+        const val EXTRA_STATUS = "extra_status"
+        const val EXTRA_IS_PAUSED = "extra_is_paused"
 
         fun startService(context: Context) {
             val intent = Intent(context, CryptoService::class.java)
@@ -53,6 +64,16 @@ class CryptoService : Service() {
             val intent = Intent(context, CryptoService::class.java)
             context.stopService(intent)
         }
+
+        fun updateProgress(context: Context, progress: Int, status: String, isPaused: Boolean = false) {
+            val intent = Intent(context, CryptoService::class.java).apply {
+                action = ACTION_UPDATE_PROGRESS
+                putExtra(EXTRA_PROGRESS, progress)
+                putExtra(EXTRA_STATUS, status)
+                putExtra(EXTRA_IS_PAUSED, isPaused)
+            }
+            context.startService(intent)
+        }
     }
 
     override fun onCreate() {
@@ -63,10 +84,18 @@ class CryptoService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_CANCEL -> {
-                // Handle cancellation - broadcast to ViewModel
-                sendBroadcast(Intent("com.obfs.encrypt.ACTION_CANCEL_OPERATION"))
+                sendBroadcast(Intent(ACTION_BROADCAST_CANCEL).apply { setPackage(packageName) })
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
+            }
+            ACTION_PAUSE, ACTION_RESUME -> {
+                sendBroadcast(Intent(ACTION_BROADCAST_PAUSE).apply { setPackage(packageName) })
+            }
+            ACTION_UPDATE_PROGRESS -> {
+                val progress = intent.getIntExtra(EXTRA_PROGRESS, 0)
+                val status = intent.getStringExtra(EXTRA_STATUS) ?: ""
+                val isPaused = intent.getBooleanExtra(EXTRA_IS_PAUSED, false)
+                updateNotification(progress, status, isPaused)
             }
             else -> {
                 startForeground(NOTIFICATION_ID, createNotification(0, "Initializing..."))
@@ -96,7 +125,7 @@ class CryptoService : Service() {
         }
     }
 
-    private fun createNotification(progress: Int, status: String): Notification {
+    private fun createNotification(progress: Int, status: String, isPaused: Boolean = false): Notification {
         val pendingIntent = PendingIntent.getActivity(
             this,
             0,
@@ -111,23 +140,36 @@ class CryptoService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Encryption in Progress")
+        val pauseResumeIntent = PendingIntent.getBroadcast(
+            this,
+            2,
+            Intent(if (isPaused) ACTION_RESUME else ACTION_PAUSE),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle(if (isPaused) "Operation Paused" else "Operation in Progress")
             .setContentText(status)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setProgress(100, progress, progress == 0)
             .addAction(
-                android.R.drawable.ic_media_pause,
+                if (isPaused) android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause,
+                if (isPaused) "Resume" else "Pause",
+                pauseResumeIntent
+            )
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
                 "Cancel",
                 cancelPendingIntent
             )
-            .build()
+            
+        return builder.build()
     }
 
-    fun updateNotification(progress: Int, status: String) {
-        val notification = createNotification(progress, status)
+    fun updateNotification(progress: Int, status: String, isPaused: Boolean = false) {
+        val notification = createNotification(progress, status, isPaused)
         notificationManager.notify(NOTIFICATION_ID, notification)
     }
 }

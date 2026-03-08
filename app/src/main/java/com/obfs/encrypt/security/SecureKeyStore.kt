@@ -9,6 +9,8 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import android.util.Base64
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /**
  * Secure KeyStore wrapper for Android Keystore system.
@@ -36,7 +38,8 @@ import android.util.Base64
  * val decrypted = keyStore.decrypt(encrypted)
  * ```
  */
-class SecureKeyStore {
+@Singleton
+class SecureKeyStore @Inject constructor() {
 
     private val keyStore: KeyStore by lazy {
         KeyStore.getInstance(KEYSTORE_PROVIDER_ANDROID).apply {

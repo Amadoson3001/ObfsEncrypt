@@ -171,6 +171,7 @@
     <string name="auth_stored_password_subtitle">Authenticate to decrypt with stored password</string>
     <string name="storage_access_required">Storage Access Required</string>
     <string name="storage_access_description">Obfs Encrypt needs access to your device storage to encrypt and decrypt files.</string>
+    <string name="permissions_required">Permissions Required</string>
     <string name="access_files">Access Files</string>
     <string name="access_files_description">Select and read files to encrypt</string>
     <string name="save_encrypted_files">Save Encrypted Files</string>
@@ -265,4 +266,78 @@
     <string name="language_english">English</string>
     <string name="language_arabic">Arabic</string>
     <string name="language_system">System Default</string>
+    
+    <!-- Onboarding -->
+    <string name="onboarding_title_1">Welcome to Obfs Encrypt</string>
+    <string name="onboarding_subtitle_1">Your files deserve military-grade protection</string>
+    <string name="onboarding_desc_1">Protect your sensitive files with AES-256-GCM encryption, the same standard used by governments and security experts worldwide.</string>
+    
+    <string name="onboarding_title_2">Encrypt Files Easily</string>
+    <string name="onboarding_subtitle_2">Simple and powerful encryption</string>
+    <string name="onboarding_desc_2">Select any file or folder, choose your encryption method, and set a strong password. Your data will be securely encrypted in seconds.</string>
+    
+    <string name="onboarding_title_3">Advanced Security</string>
+    <string name="onboarding_subtitle_3">Choose your protection level</string>
+    <string name="onboarding_desc_3">From fast encryption for large files to maximum security with Argon2id key derivation. You control how your files are protected.</string>
+    
+    <string name="onboarding_title_4">Biometric Unlock</string>
+    <string name="onboarding_subtitle_4">Quick access with fingerprint or face</string>
+    <string name="onboarding_desc_4">Enable biometric authentication for instant access to your encrypted files. No need to remember complex passwords every time.</string>
+    
+    <string name="get_started">Get Started</string>
+    <string name="skip">Skip</string>
+    <string name="next">Next</string>
+    <string name="onboarding_complete">You\'re all set!</string>
+    
+    <!-- Help -->
+    <string name="help">Help</string>
+    <string name="help_amp_faq">Help &amp; FAQ</string>
+    <string name="frequently_asked_questions">Frequently Asked Questions</string>
+    
+    <!-- FAQ Items -->
+    <string name="faq_question_1">What is AES-256-GCM encryption?</string>
+    <string name="faq_answer_1">AES-256-GCM is a military-grade encryption standard using 256-bit keys in Galois/Counter Mode. It provides both confidentiality and integrity verification, ensuring your files cannot be read or tampered with without the correct password.</string>
+    
+    <string name="faq_question_2">What encryption method should I use?</string>
+    <string name="faq_answer_2">For most users, the Standard method provides the best balance of security and speed. Use Fast for large, temporary files. Use Strong for highly sensitive data that needs maximum protection against brute-force attacks.</string>
+    
+    <string name="faq_question_3">Can I recover files if I forget the password?</string>
+    <string name="faq_answer_3">No, encrypted files cannot be recovered without the correct password. This is by design - the encryption is so strong that even we cannot bypass it. We recommend setting a security question or backing up your password securely.</string>
+    
+    <string name="faq_question_4">What is secure delete?</string>
+    <string name="faq_answer_4">Secure delete overwrites the original file with random data 3 times before removing it, making it impossible to recover the original content even with specialized recovery software.</string>
+    
+    <string name="faq_question_5">Is my data stored on servers?</string>
+    <string name="faq_answer_5">No, all encryption happens locally on your device. Your files never leave your device and are never uploaded to any server. Everything stays on your device.</string>
+    
+    <string name="faq_question_6">What is a keyfile?</string>
+    <string name="faq_answer_6">A keyfile is an additional security layer. Instead of just using a password, you can require a specific file as part of the decryption process. Without both the password and keyfile, the file cannot be decrypted.</string>
+    
+    <string name="faq_question_7">What happens to encrypted files?</string>
+    <string name="faq_answer_7">Encrypted files get the .obfs extension and can only be opened with this app using the correct password. The original file can be securely shredded if you choose that option.</string>
+    
+    <string name="faq_question_8">Does the app work offline?</string>
+    <string name="faq_answer_8">Yes! Obfs Encrypt works completely offline. No internet connection is required for any feature, ensuring your data never leaves your device.</string>
+    
+    <!-- Encryption Method Explainer -->
+    <string name="encryption_explainer">Encryption Explained</string>
+    <string name="encryption_how_it_works">How It Works</string>
+    <string name="encryption_step_1">1. Your password is processed through Argon2id</string>
+    <string name="encryption_step_1_desc">Argon2id is a key derivation function that turns your password into a secure encryption key. It\'s resistant to both brute-force and GPU attacks.</string>
+    <string name="encryption_step_2">2. AES-256-CTR encrypts your data</string>
+    <string name="encryption_step_2_desc">The Advanced Encryption Standard with 256-bit keys in Counter Mode provides fast, secure encryption of your files.</string>
+    <string name="encryption_step_3">3. GCM adds integrity verification</string>
+    <string name="encryption_step_3_desc">Galois/Counter Mode adds authentication tags to detect any tampering with your encrypted files.</string>
+    <string name="learn_more">Learn More</string>
+    <string name="got_it">Got It</string>
+    
+    <!-- Tooltips -->
+    <string name="tooltip_encryption_method">Encryption method determines the security level and speed of encryption.</string>
+    <string name="tooltip_secure_delete">Securely overwrites files before deletion to prevent recovery.</string>
+    <string name="tooltip_keyfile">Keyfile adds an extra layer of security beyond your password.</string>
+    <string name="tooltip_integrity_check">Verifies that encrypted files haven\'t been tampered with.</string>
+    <string name="tooltip_biometric">Use fingerprint or face for quick, secure access.</string>
+    <string name="tooltip_output_folder">Choose where encrypted files are saved.</string>
+    <string name="tooltip_app_lock">Require authentication each time you open the app.</string>
+    <string name="show_tooltip">Show tooltip</string>
 </resources>

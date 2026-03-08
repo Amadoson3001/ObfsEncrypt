@@ -14,16 +14,20 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -39,9 +43,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import com.obfs.encrypt.ui.theme.isAMOLEDTheme
-import com.obfs.encrypt.ui.theme.amoledOutlinedButtonContainerColor
-import com.obfs.encrypt.ui.theme.amoledOutlinedButtonContentColor
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -54,6 +55,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.obfs.encrypt.R
 import com.obfs.encrypt.ui.theme.Motion
+import com.obfs.encrypt.ui.theme.isAMOLEDTheme
+import com.obfs.encrypt.ui.theme.amoledOutlinedButtonContainerColor
+import com.obfs.encrypt.ui.theme.amoledOutlinedButtonContentColor
 import com.obfs.encrypt.ui.theme.pressClickEffect
 import com.obfs.encrypt.viewmodel.MainViewModel
 
@@ -72,9 +76,11 @@ fun ProgressScreen(
     operation: String,
     onNavigateBack: () -> Unit
 ) {
-    val progress by viewModel.progress.collectAsState()
+    val progressState by viewModel.progressState.collectAsState()
+    val progress = progressState.progress
     val statusMessage by viewModel.statusMessage.collectAsState()
     val isActive by viewModel.isOperationActive.collectAsState()
+    val isPaused by viewModel.isPaused.collectAsState()
 
     val animatedProgress by animateFloatAsState(
         targetValue = progress,
@@ -125,7 +131,7 @@ fun ProgressScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(32.dp),
+                    .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
@@ -165,14 +171,24 @@ fun ProgressScreen(
                     CircularProgressIndicator(
                         modifier = Modifier
                             .size(100.dp)
-                            .scale(pulseScale),
-                        color = MaterialTheme.colorScheme.primary,
-                        strokeWidth = 8.dp
+                            .scale(if (isPaused) 1f else pulseScale),
+                        color = if (isPaused) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary,
+                        strokeWidth = 8.dp,
+                        progress = { if (isPaused) progress else animatedProgress }
                     )
+                    
+                    if (isPaused) {
+                        Icon(
+                            imageVector = Icons.Default.Pause,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(48.dp)
+                        )
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
             AnimatedVisibility(
                 visible = progress >= 1f && !isActive && !statusMessage.startsWith("Error", ignoreCase = true),
@@ -264,75 +280,147 @@ fun ProgressScreen(
                 exit = fadeOut()
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (progressState.totalFiles > 1) {
+                        Text(
+                            text = "File ${progressState.currentFileIndex} of ${progressState.totalFiles}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
                     LinearProgressIndicator(
-                        progress = { animatedProgress },
+                        progress = { if (isPaused) progress else animatedProgress },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(12.dp),
-                        color = MaterialTheme.colorScheme.primary,
+                        color = if (isPaused) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary,
                         trackColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    Text(
-                        text = "${(animatedProgress * 100).toInt()}%",
-                        style = MaterialTheme.typography.displaySmall,
-                        fontWeight = FontWeight.Black
                     )
 
                     Spacer(modifier = Modifier.height(16.dp))
 
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${(progress * 100).toInt()}%",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Black
+                        )
+                        
+                        Text(
+                            text = progressState.speedFormatted,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        
+                        Text(
+                            text = "ETA: ${progressState.etaFormatted}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
                     Text(
-                        text = statusMessage,
+                        text = progressState.currentFile ?: statusMessage,
                         style = MaterialTheme.typography.bodyLarge,
                         textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
                     )
 
-                    Spacer(modifier = Modifier.height(64.dp))
+                    Spacer(modifier = Modifier.height(48.dp))
 
-                    if (isAMOLEDTheme()) {
-                        OutlinedButton(
-                            onClick = {
-                                viewModel.cancelOperation()
-                                onNavigateBack()
-                            },
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = amoledOutlinedButtonContainerColor(),
-                                contentColor = amoledOutlinedButtonContentColor(MaterialTheme.colorScheme.onErrorContainer)
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(56.dp)
-                                .pressClickEffect(),
-                            shape = MaterialTheme.shapes.large
-                        ) {
-                            Icon(Icons.Default.Cancel, contentDescription = null, modifier = Modifier.padding(end = 8.dp))
-                            Text(stringResource(R.string.cancel_operation), fontWeight = FontWeight.Bold)
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        if (isAMOLEDTheme()) {
+                            OutlinedButton(
+                                onClick = { viewModel.togglePause() },
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = amoledOutlinedButtonContainerColor(),
+                                    contentColor = amoledOutlinedButtonContentColor(MaterialTheme.colorScheme.primary)
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(56.dp)
+                                    .pressClickEffect(),
+                                shape = MaterialTheme.shapes.large
+                            ) {
+                                Icon(
+                                    if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, 
+                                    contentDescription = null, 
+                                    modifier = Modifier.padding(end = 8.dp)
+                                )
+                                Text(if (isPaused) "Resume" else "Pause", fontWeight = FontWeight.Bold)
+                            }
+                        } else {
+                            FilledTonalButton(
+                                onClick = { viewModel.togglePause() },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(56.dp)
+                                    .pressClickEffect(),
+                                shape = MaterialTheme.shapes.large
+                            ) {
+                                Icon(
+                                    if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause, 
+                                    contentDescription = null, 
+                                    modifier = Modifier.padding(end = 8.dp)
+                                )
+                                Text(if (isPaused) "Resume" else "Pause", fontWeight = FontWeight.Bold)
+                            }
                         }
-                    } else {
-                        FilledTonalButton(
-                            onClick = {
-                                viewModel.cancelOperation()
-                                onNavigateBack()
-                            },
-                            colors = ButtonDefaults.filledTonalButtonColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer,
-                                contentColor = MaterialTheme.colorScheme.onErrorContainer
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(56.dp)
-                                .pressClickEffect(),
-                            shape = MaterialTheme.shapes.large
-                        ) {
-                            Icon(Icons.Default.Cancel, contentDescription = null, modifier = Modifier.padding(end = 8.dp))
-                            Text(stringResource(R.string.cancel_operation), fontWeight = FontWeight.Bold)
+                        
+                        Spacer(modifier = Modifier.width(16.dp))
+                        
+                        if (isAMOLEDTheme()) {
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.cancelOperation()
+                                    onNavigateBack()
+                                },
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = amoledOutlinedButtonContainerColor(),
+                                    contentColor = amoledOutlinedButtonContentColor(MaterialTheme.colorScheme.error)
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(56.dp)
+                                    .pressClickEffect(),
+                                shape = MaterialTheme.shapes.large
+                            ) {
+                                Icon(Icons.Default.Cancel, contentDescription = null, modifier = Modifier.padding(end = 8.dp))
+                                Text(stringResource(R.string.cancel_operation), fontWeight = FontWeight.Bold)
+                            }
+                        } else {
+                            FilledTonalButton(
+                                onClick = {
+                                    viewModel.cancelOperation()
+                                    onNavigateBack()
+                                },
+                                colors = ButtonDefaults.filledTonalButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(56.dp)
+                                    .pressClickEffect(),
+                                shape = MaterialTheme.shapes.large
+                            ) {
+                                Icon(Icons.Default.Cancel, contentDescription = null, modifier = Modifier.padding(end = 8.dp))
+                                Text(stringResource(R.string.cancel_operation), fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }
             }
         }
     }
-}}
+}
+}

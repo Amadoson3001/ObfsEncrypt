@@ -65,17 +65,29 @@ class MainActivity : AppCompatActivity() {
     var showPermissionDialog by mutableStateOf(false)
     var showPermissionGrantedDialog by mutableStateOf(false)
     var showBiometricDialog by mutableStateOf(false)
+    var showOnboarding by mutableStateOf(false)
     var outputFolderPath by mutableStateOf("")
     
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val allGranted = permissions.values.all { it }
-        if (allGranted) {
+        val storageGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            PermissionHelper.hasStoragePermission(this)
+        } else {
+            permissions[android.Manifest.permission.READ_EXTERNAL_STORAGE] == true &&
+            permissions[android.Manifest.permission.WRITE_EXTERNAL_STORAGE] == true
+        }
+        
+        if (storageGranted) {
             hasPermission = true
             outputFolderPath = appDirectoryManager.getOutputDirectoryPath()
             showPermissionGrantedDialog = true
         }
+
+        // Notification permission doesn't block the app, but we want it for progress
+        val notificationGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions[android.Manifest.permission.POST_NOTIFICATIONS] == true
+        } else true
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -116,6 +128,13 @@ class MainActivity : AppCompatActivity() {
 
         // Initial permission check
         hasPermission = PermissionHelper.hasStoragePermission(this)
+
+        // Check onboarding status
+        lifecycleScope.launch {
+            val settingsRepository = (application as ObfsApp).settingsRepository
+            val onboardingCompleted = settingsRepository.onboardingCompleted.first()
+            showOnboarding = !onboardingCompleted
+        }
 
         if (!hasPermission) {
             showPermissionDialog = true
@@ -162,21 +181,38 @@ class MainActivity : AppCompatActivity() {
                     AppNavigation()
                 }
 
+                // Show onboarding on first run
+                if (showOnboarding) {
+                    com.obfs.encrypt.ui.screens.OnboardingTutorialScreen(
+                        onOnboardingComplete = {
+                            mainViewModel.completeOnboarding()
+                            showOnboarding = false
+                        }
+                    )
+                }
+
                 // Show permission dialogs when needed
                 if (showPermissionDialog) {
                     PermissionDialog(
                         onGrantPermission = {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                // Android 11+: Open settings directly
+                                // Android 11+: Open settings for storage
                                 PermissionHelper.requestStoragePermission(this@MainActivity)
+                                
+                                // Also request notification permission if needed (Android 13+)
+                                if (!PermissionHelper.hasNotificationPermission(this@MainActivity)) {
+                                    PermissionHelper.requestNotificationPermission(this@MainActivity)
+                                }
                             } else {
                                 // Android 10 and below: Use runtime permission launcher
-                                permissionLauncher.launch(
-                                    arrayOf(
-                                        android.Manifest.permission.READ_EXTERNAL_STORAGE,
-                                        android.Manifest.permission.WRITE_EXTERNAL_STORAGE
-                                    )
+                                val perms = mutableListOf(
+                                    android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                                    android.Manifest.permission.WRITE_EXTERNAL_STORAGE
                                 )
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    perms.add(android.Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                                permissionLauncher.launch(perms.toTypedArray())
                             }
                             showPermissionDialog = false
                         },
